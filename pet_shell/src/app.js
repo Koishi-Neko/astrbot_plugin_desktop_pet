@@ -214,6 +214,14 @@ document.addEventListener("click", (e) => {
   if (!menu.contains(e.target)) menu.classList.add("hidden");
 });
 
+// 点击窗口外的桌面区域会让窗口失焦，此时也收起菜单
+window.addEventListener("blur", () => menu.classList.add("hidden"));
+
+// Esc 关闭菜单
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") menu.classList.add("hidden");
+});
+
 $("menu-toggle-input").addEventListener("click", () => {
   inputBar.classList.toggle("hidden");
   if (!inputBar.classList.contains("hidden")) chatInput.focus();
