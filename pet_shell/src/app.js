@@ -460,8 +460,8 @@ window.onClickThrough = (enabled) => {
 let lastMouseMove = 0;
 
 // 视线跟随鼠标（canvas 是 pointer-events:none，需手动转发坐标）
-// 窗口外 80px 缓冲区内可追踪；超出则指向画布中心，模型回正
-const GAZE_MARGIN = 80;
+// 窗口外 30px 缓冲区内可追踪；超出则清零视线目标，模型回正
+const GAZE_MARGIN = 30;
 
 document.addEventListener("mousemove", (e) => {
   lastMouseMove = Date.now();
