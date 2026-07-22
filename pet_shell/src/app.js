@@ -464,6 +464,10 @@ let lastMouseMove = 0;
 // 无法依赖"出界事件"回正，改用看门狗：无新事件 1.5s 自动回正。
 document.addEventListener("mousemove", (e) => {
   lastMouseMove = Date.now();
+  if (recenterAnim) { // 鼠标一动，立即打断回正动画
+    clearInterval(recenterAnim);
+    recenterAnim = null;
+  }
   if (!live2dModel) return;
   const r = document.getElementById("live2d-canvas").getBoundingClientRect();
   const x = e.clientX - r.left;
@@ -473,10 +477,28 @@ document.addEventListener("mousemove", (e) => {
   }
 });
 
+// 回正：1.2s 缓动把视线目标降到 0（比库默认归位更柔和）
+let recenterAnim = null;
+
 function gazeRecenter() {
-  if (!live2dModel) return;
+  if (!live2dModel || recenterAnim) return;
   try {
-    live2dModel.internalModel.focusController.focus(0, 0);
+    const fc = live2dModel.internalModel.focusController;
+    const sx = fc.x, sy = fc.y;
+    if (Math.abs(sx) < 0.02 && Math.abs(sy) < 0.02) return; // 已经居中
+    const t0 = performance.now();
+    const dur = 1200;
+    recenterAnim = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / dur);
+      const e = k * k * (3 - 2 * k); // smoothstep
+      try {
+        fc.focus(sx * (1 - e), sy * (1 - e));
+      } catch (err) { /* 忽略 */ }
+      if (k >= 1) {
+        clearInterval(recenterAnim);
+        recenterAnim = null;
+      }
+    }, 50);
   } catch (e) {
     /* 忽略 */
   }
@@ -485,9 +507,9 @@ function gazeRecenter() {
 // 鼠标离开文档立即回正
 document.addEventListener("mouseleave", gazeRecenter);
 
-// 看门狗：鼠标静止或离开 1.5s 后回正
+// 看门狗：鼠标静止或离开 3s 后回正
 setInterval(() => {
-  if (Date.now() - lastMouseMove > 1500) gazeRecenter();
+  if (Date.now() - lastMouseMove > 3000) gazeRecenter();
 }, 500);
 
 function flashExpression(name, ms = 3500) {
