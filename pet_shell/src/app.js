@@ -460,11 +460,21 @@ window.onClickThrough = (enabled) => {
 let lastMouseMove = 0;
 
 // 视线跟随鼠标（canvas 是 pointer-events:none，需手动转发坐标）
+// 窗口外 80px 缓冲区内可追踪；超出则指向画布中心，模型回正
+const GAZE_MARGIN = 80;
+
 document.addEventListener("mousemove", (e) => {
   lastMouseMove = Date.now();
   if (!live2dModel) return;
   const r = document.getElementById("live2d-canvas").getBoundingClientRect();
-  live2dModel.focus(e.clientX - r.left, e.clientY - r.top);
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  if (x < -GAZE_MARGIN || y < -GAZE_MARGIN || x > r.width + GAZE_MARGIN || y > r.height + GAZE_MARGIN) {
+    // 出界回正：focus() 永远输出满幅方向，必须直接清零视线目标
+    live2dModel.internalModel.focusController.focus(0, 0);
+  } else {
+    live2dModel.focus(x, y);
+  }
 });
 
 function flashExpression(name, ms = 3500) {
