@@ -166,6 +166,37 @@ function queueType(text) {
 function showBubble() {
   bubbleText.textContent = "";
   bubble.classList.remove("hidden");
+  if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
+}
+
+// ---------- 气泡自动收起 ----------
+// 回复结束 15 秒后自动收起，点击气泡可立即收起（模型始终不动）。
+
+let bubbleHideTimer = null;
+
+function hideBubble() {
+  bubble.classList.add("hidden");
+}
+
+bubble.addEventListener("click", hideBubble);
+
+// 左上角小圆点：切换气泡显示/隐藏（重新显示时保留上次内容）
+$("bubble-toggle").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (bubble.classList.contains("hidden")) {
+    if (!bubbleText.textContent) {
+      bubbleText.textContent = "戳我下方的小智乃，和我聊聊天吧~";
+    }
+    bubble.classList.remove("hidden");
+    if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
+  } else {
+    hideBubble();
+  }
+});
+
+function scheduleBubbleHide() {
+  if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
+  bubbleHideTimer = setTimeout(hideBubble, 15000);
 }
 
 // ---------- 对话 ----------
@@ -211,6 +242,7 @@ async function sendChat(text) {
     } else if (data.type === "connect_error") {
       resolveFinished({ error: data.message });
     } else if (data.type === "stream_end") {
+      scheduleBubbleHide();
       resolveFinished({ error: null });
     }
   });
@@ -243,6 +275,7 @@ async function sendChat(text) {
     bubbleText.textContent = "";
     setEmotion("难过");
     queueType("连接不上 AstrBot 了……检查一下面板和 API Key 吧。");
+    scheduleBubbleHide();
   } finally {
     if (unlisten) unlisten();
     sending = false;
@@ -252,6 +285,40 @@ async function sendChat(text) {
 }
 
 // ---------- 交互 ----------
+
+// 右下角手柄：拖动调整窗口（模型）大小
+const resizeHandle = $("resize-handle");
+let resizing = null;
+
+resizeHandle.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  e.stopPropagation(); // 不触发立绘拖拽
+  resizing = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!resizing) return;
+  invoke()("resize_window", {
+    width: resizing.w + (e.screenX - resizing.x),
+    height: resizing.h + (e.screenY - resizing.y),
+  }).catch(() => {});
+});
+
+document.addEventListener("mouseup", () => {
+  if (!resizing) return;
+  resizing = null;
+  localStorage.setItem("pet_win_w", String(window.innerWidth));
+  localStorage.setItem("pet_win_h", String(window.innerHeight));
+});
+
+// 启动时恢复上次的窗口尺寸
+(function restoreWindowSize() {
+  const w = parseInt(localStorage.getItem("pet_win_w") || "0", 10);
+  const h = parseInt(localStorage.getItem("pet_win_h") || "0", 10);
+  if (w >= 200 && h >= 300) {
+    invoke()("resize_window", { width: w, height: h }).catch(() => {});
+  }
+})();
 
 // 单击立绘：切换输入框
 let dragMoved = false;

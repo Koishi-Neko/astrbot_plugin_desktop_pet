@@ -35,6 +35,14 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 调整窗口大小（拖动手柄用），单位是逻辑像素。
+#[tauri::command]
+fn resize_window(window: tauri::WebviewWindow, width: f64, height: f64) {
+    let w = width.clamp(200.0, 800.0);
+    let h = height.clamp(300.0, 1100.0);
+    let _ = window.set_size(tauri::LogicalSize::new(w, h));
+}
+
 // ---------- 桌宠聊天（原生 HTTP，绕过 WebView CORS 限制） ----------
 
 #[derive(serde::Deserialize)]
@@ -148,6 +156,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             set_click_through,
             quit_app,
+            resize_window,
             pet_chat,
             pet_health
         ])

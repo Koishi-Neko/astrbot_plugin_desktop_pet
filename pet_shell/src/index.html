@@ -8,10 +8,12 @@
 </head>
 <body>
   <div id="bubble" class="hidden"><span id="bubble-text"></span></div>
+  <div id="bubble-toggle" title="显示/隐藏对话"></div>
 
   <div id="pet" data-tauri-drag-region>
     <img id="avatar" src="assets/calm.png" draggable="false" data-tauri-drag-region />
     <canvas id="live2d-canvas"></canvas>
+    <div id="resize-handle" title="拖动调整大小">↘</div>
   </div>
 
   <div id="input-bar" class="hidden">

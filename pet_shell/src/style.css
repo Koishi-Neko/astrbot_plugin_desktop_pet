@@ -19,14 +19,15 @@ body {
   display: none !important;
 }
 
-/* 对话气泡 */
+/* 对话气泡（底部锚定在头顶气泡带下缘，内容增多时向上延伸，模型不动） */
 #bubble {
   position: absolute;
-  top: 8px;
+  bottom: calc(76% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 260px;
-  max-height: 150px;
+  width: 92%;
+  max-width: 260px;
+  max-height: calc(24% - 8px);
   overflow-y: auto;
   background: rgba(255, 255, 255, 0.96);
   border: 2px solid #ffb7d5;
@@ -37,6 +38,8 @@ body {
   color: #333;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
   word-break: break-word;
+  z-index: 60; /* 浮在 Live2D 模型之上 */
+  cursor: pointer; /* 点击可收起 */
 }
 
 #bubble::after {
@@ -50,14 +53,32 @@ body {
   border-top: 8px solid #ffb7d5;
 }
 
-/* 桌宠立绘 */
+/* 气泡开关小圆点（人物头部靠左） */
+#bubble-toggle {
+  position: absolute;
+  top: 28%;
+  left: 16%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 143, 191, 0.55);
+  cursor: pointer;
+  z-index: 70;
+  transition: background 0.15s;
+}
+
+#bubble-toggle:hover {
+  background: rgba(255, 143, 191, 1);
+}
+
+/* 桌宠立绘（顶部 24% 为气泡带，模型在其下渲染，永不重叠） */
 #pet {
   position: absolute;
+  top: 24%;
   bottom: 46px;
   left: 50%;
   transform: translateX(-50%);
-  width: 240px;
-  height: 300px;
+  width: 90%;
   cursor: grab;
 }
 
@@ -74,6 +95,29 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+/* 右下角调整大小手柄 */
+#resize-handle {
+  position: absolute;
+  right: -4px;
+  bottom: -8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid rgba(90, 74, 66, 0.35);
+  color: rgba(90, 74, 66, 0.85);
+  font-size: 14px;
+  line-height: 24px;
+  text-align: center;
+  cursor: nwse-resize;
+  z-index: 90;
+  user-select: none;
+}
+
+#resize-handle:hover {
+  background: rgba(255, 255, 255, 0.75);
 }
 
 /* 输入框 */
@@ -106,6 +150,7 @@ body {
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 10px;
+  z-index: 60;
 }
 
 /* 右键菜单 */
