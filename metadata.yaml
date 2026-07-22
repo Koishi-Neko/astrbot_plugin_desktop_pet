@@ -1,0 +1,5 @@
+name: astrbot_plugin_desktop_pet
+desc: 为自研桌面桌宠壳提供 SSE 对话接口（人设 + 情绪标签 + 历史上下文）
+version: 0.1.0
+author: Koishi-Neko
+repo: https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet

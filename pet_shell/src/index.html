@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AstrBotPet</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="bubble" class="hidden"><span id="bubble-text"></span></div>
+
+  <div id="pet" data-tauri-drag-region>
+    <img id="avatar" src="assets/calm.png" draggable="false" data-tauri-drag-region />
+  </div>
+
+  <div id="input-bar" class="hidden">
+    <input id="chat-input" type="text" placeholder="和我说点什么…" autocomplete="off" />
+  </div>
+
+  <div id="status-tip" class="hidden"></div>
+
+  <div id="menu" class="hidden">
+    <div class="menu-item" id="menu-toggle-input">聊天</div>
+    <div class="menu-item" id="menu-passthrough">点击穿透 (Ctrl+Shift+P)</div>
+    <div class="menu-item" id="menu-settings">设置</div>
+    <div class="menu-item danger" id="menu-quit">退出</div>
+  </div>
+
+  <div id="settings" class="hidden">
+    <div class="settings-title">连接设置</div>
+    <label>AstrBot 地址</label>
+    <input id="cfg-base-url" type="text" spellcheck="false" />
+    <label>API Key</label>
+    <input id="cfg-api-key" type="password" spellcheck="false" />
+    <div class="settings-buttons">
+      <button id="cfg-test">测试连接</button>
+      <button id="cfg-save">保存</button>
+      <button id="cfg-close">关闭</button>
+    </div>
+    <div id="cfg-message"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

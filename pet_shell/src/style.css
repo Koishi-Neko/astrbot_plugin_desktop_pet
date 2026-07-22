@@ -1,0 +1,195 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* 对话气泡 */
+#bubble {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  max-height: 150px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.96);
+  border: 2px solid #ffb7d5;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  word-break: break-word;
+}
+
+#bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid #ffb7d5;
+}
+
+/* 桌宠立绘 */
+#pet {
+  position: absolute;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  height: 200px;
+  cursor: grab;
+}
+
+#avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* 输入框 */
+#input-bar {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+}
+
+#chat-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 2px solid #ffb7d5;
+  border-radius: 16px;
+  outline: none;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+
+/* 状态提示（穿透模式等） */
+#status-tip {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 10px;
+}
+
+/* 右键菜单 */
+#menu {
+  position: absolute;
+  min-width: 180px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+  z-index: 100;
+}
+
+.menu-item {
+  padding: 7px 12px;
+  font-size: 13px;
+  color: #333;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: #ffe3ef;
+}
+
+.menu-item.danger {
+  color: #d33;
+}
+
+/* 设置面板 */
+#settings {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 270px;
+  background: rgba(255, 255, 255, 0.99);
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  padding: 14px;
+  z-index: 200;
+  font-size: 12px;
+  color: #333;
+}
+
+.settings-title {
+  font-size: 14px;
+  font-weight: bold;
+  margin-bottom: 10px;
+}
+
+#settings label {
+  display: block;
+  margin: 8px 0 3px;
+  color: #666;
+}
+
+#settings input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+}
+
+.settings-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.settings-buttons button {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  background: #ff8fbf;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-buttons button:hover {
+  background: #ff74b0;
+}
+
+#cfg-message {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #888;
+  word-break: break-all;
+}

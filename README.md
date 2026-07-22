@@ -1,0 +1,103 @@
+# astrbot_plugin_desktop_pet
+
+把 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 变成桌面桌宠的大脑：本仓库包含两部分——
+
+- **AstrBot 插件**（仓库根目录）：在 AstrBot 内注册 HTTP+SSE 对话接口，负责人设、情绪标签解析、LLM 调用。
+- **桌宠壳**（`pet_shell/`，Tauri 2 + 纯 HTML/JS）：Windows 桌面上的透明、无边框、置顶小窗，显示立绘（随情绪切换）、打字机气泡和聊天输入，通过 SSE 与插件实时对话。
+
+```
+桌宠壳 (Windows)                      AstrBot
+┌────────────────────┐  HTTP+SSE   ┌──────────────────────────┐
+│ 透明置顶窗口        │ ─────────► │ desktop_pet 插件          │
+│  立绘/气泡/输入框   │  POST chat │  persona + llm_generate() │
+│                    │ ◄───────── │  emotion/delta/done 帧    │
+└────────────────────┘            └──────────────────────────┘
+```
+
+## 一、安装 AstrBot 插件
+
+方式 A（推荐）：AstrBot WebUI → 插件 → 安装插件 → 填本仓库地址。
+
+方式 B（手动）：把仓库根目录的 `main.py`、`metadata.yaml`、`_conf_schema.json` 拷到 `AstrBot/data/plugins/astrbot_plugin_desktop_pet/`，重启 AstrBot。
+
+插件配置项（WebUI 插件卡片 → 配置）：
+
+| 配置 | 说明 |
+| --- | --- |
+| `provider_id` | 指定 LLM 提供商 ID，留空用 AstrBot 默认对话模型 |
+| `persona` | 桌宠人设（system prompt），情绪输出格式要求会自动追加 |
+| `default_emotion` | 模型没按格式输出时的兜底情绪，默认「平静」 |
+| `history_turns` | 每次请求携带的最大历史轮数，默认 10 |
+
+## 二、创建 API Key
+
+插件接口挂在 dashboard 插件扩展路径下，需要带 `plugin` scope 的 API Key 鉴权：
+
+- WebUI → 设置 → API Key → 新建（勾选 plugin scope）。
+
+请求时通过 `X-API-Key: <key>` 或 `Authorization: ApiKey <key>` 或 `?api_key=` 传递（注意：`Bearer` 前缀会被当作 dashboard JWT，不会按 API Key 处理）。
+
+## 三、接口说明
+
+### `POST /api/v1/plugins/extensions/desktop_pet/pet/chat`
+
+```json
+{"message": "你好", "history": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+```
+
+响应 `text/event-stream`：
+
+```
+data: {"type":"emotion","label":"高兴"}
+data: {"type":"delta","text":"嗨嗨！"}
+data: {"type":"delta","text":"今天也要加油哦！"}
+data: {"type":"done"}
+```
+
+异常时会先补一帧 `{"type":"error","message":"..."}`，并以兜底情绪回复，保证桌宠侧不中断。
+
+### `GET /api/v1/plugins/extensions/desktop_pet/pet/health`
+
+探活，返回插件与默认模型可用状态。
+
+## 四、运行桌宠壳（pet_shell）
+
+前提：Rust 工具链（rustup）+ MSVC Build Tools + Node.js。
+
+```bash
+cd pet_shell
+npm install
+npm run dev        # 开发调试
+npm run build      # 产出独立 exe（src-tauri/target/release）
+```
+
+首次运行：右键桌宠 →「设置」，填入 AstrBot 地址（默认 `http://localhost:6185/api/v1/plugins/extensions`）和上一步的 API Key。也可以在 `pet_shell/src/` 下放一个 `config.local.json` 预置配置（不会被 git 提交）：
+
+```json
+{
+  "base_url": "http://localhost:6185/api/v1/plugins/extensions",
+  "api_key": "你的 API Key"
+}
+```
+
+操作：
+
+- **单击立绘**：弹出/收起输入框，回车发送。
+- **拖动立绘**：移动位置。
+- **右键**：聊天 / 点击穿透 / 设置 / 退出。
+- **Ctrl+Shift+P**：切换点击穿透（穿透开启后窗口不接收任何鼠标事件，只能用快捷键或托盘菜单切回）。
+- **托盘图标**：切换穿透 / 退出。
+
+## 五、替换立绘
+
+`pet_shell/src/assets/` 下按情绪命名：`平静.png`、`高兴.png`、`生气.png`、`害羞.png`、`惊讶.png`、`难过.png`、`疑惑.png`、`调皮.png`。用同名文件覆盖即可（建议透明背景 PNG，256×256 以上）。仓库内置的是脚本生成的占位图（`pet_shell/tools/gen_assets.py`）。
+
+## 六、常见问题
+
+- **桌宠无回复**：先在设置面板点「测试连接」；再确认 AstrBot 日志里插件已加载（`web api registered`）。
+- **回复没有切换表情**：模型未按格式输出情绪标签时会用 `default_emotion` 兜底，属正常现象；可在人设里强化格式要求。
+- **远端 AstrBot**：把地址改成对应主机即可（注意 6185 端口的访问控制，API Key 即鉴权，请勿暴露到公网）。
+
+## 许可
+
+MIT

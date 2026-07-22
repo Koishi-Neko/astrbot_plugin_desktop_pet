@@ -1,0 +1,28 @@
+{
+    "provider_id": {
+        "description": "指定 LLM 提供商 ID",
+        "hint": "留空则使用 AstrBot 当前默认的对话模型。可在 AstrBot 后台「服务提供商」中查看已有提供商的 ID。",
+        "type": "string",
+        "_special": "select_provider",
+        "default": ""
+    },
+    "persona": {
+        "description": "桌宠人设（system prompt）",
+        "hint": "描述桌宠的性格、口癖、与用户的关系。情绪输出格式要求会自动追加，无需在此填写。",
+        "type": "string",
+        "default": "你是住在用户电脑桌面上的小桌宠，性格活泼粘人，把用户当作最重要的人。"
+    },
+    "default_emotion": {
+        "description": "兜底情绪",
+        "hint": "当模型回复没有按格式输出情绪标签时使用，需与 pet_shell/assets/ 下的立绘文件名一致。",
+        "type": "string",
+        "options": ["平静", "高兴", "生气", "害羞", "惊讶", "难过", "疑惑", "调皮"],
+        "default": "平静"
+    },
+    "history_turns": {
+        "description": "历史轮数上限",
+        "hint": "每次请求最多携带的最近对话轮数（桌宠壳会在客户端保存历史并随请求发送）。0 表示不带历史。",
+        "type": "int",
+        "default": 10
+    }
+}

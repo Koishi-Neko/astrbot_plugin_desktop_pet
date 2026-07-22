@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+pet_shell/src-tauri/target/
+pet_shell/src-tauri/gen/
+**/config.local.json

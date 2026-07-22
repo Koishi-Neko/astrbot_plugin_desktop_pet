@@ -1,0 +1,13 @@
+{
+  "name": "astrbot-pet-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AstrBot 桌面桌宠壳（Tauri 2）",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
