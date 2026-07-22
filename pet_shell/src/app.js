@@ -73,7 +73,7 @@ const EMOTION_EXPRESSIONS = {
   "惊讶": "oo_mouth",
   "难过": "closed_happy",
   "疑惑": "o_mouth",
-  "调皮": "heart_eyes",
+  "调皮": "closed_smile",
 };
 
 async function initLive2D() {
@@ -111,11 +111,21 @@ async function initLive2D() {
 
     live2dModel = model;
     avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
-    model.motion("idle");
-    // 任何动作播完都回到 idle，形成循环
-    model.on("motionFinish", () => model.motion("idle"));
+    model.motion("idle_sway"); // 待机增强版（原 idle + 低频摆动）
+    // 任何动作播完都回到待机循环
+    model.on("motionFinish", () => model.motion("idle_sway"));
   } catch (e) {
     console.warn("Live2D 初始化失败，回退为静态立绘：", e);
+  }
+}
+
+// 重置表情（注意：expression() 不传参会随机应用一个表情，必须用 resetExpression）
+function resetExpression() {
+  if (!live2dModel) return;
+  try {
+    live2dModel.internalModel.motionManager.expressionManager.resetExpression();
+  } catch (e) {
+    console.warn("重置表情失败:", e);
   }
 }
 
@@ -123,8 +133,11 @@ function playEmotionMotion(label) {
   if (!live2dModel) return;
   const expr = EMOTION_EXPRESSIONS[label];
   try {
-    // 不带参数调用 expression() 可恢复默认表情
-    live2dModel.expression(expr || undefined);
+    if (expr) {
+      live2dModel.expression(expr);
+    } else {
+      resetExpression();
+    }
   } catch (e) {
     console.warn("切换表情失败：", label, e);
   }
@@ -416,6 +429,69 @@ function showStatusTip(text, ms) {
 window.onClickThrough = (enabled) => {
   showStatusTip(enabled ? "穿透模式：Ctrl+Shift+P 恢复" : "已恢复交互", enabled ? 0 : 2000);
 };
+
+// ---------- 灵动待机系统 ----------
+
+let lastMouseMove = 0;
+
+// 视线跟随鼠标（canvas 是 pointer-events:none，需手动转发坐标）
+document.addEventListener("mousemove", (e) => {
+  lastMouseMove = Date.now();
+  if (!live2dModel) return;
+  const r = document.getElementById("live2d-canvas").getBoundingClientRect();
+  live2dModel.focus(e.clientX - r.left, e.clientY - r.top);
+});
+
+function flashExpression(name, ms = 3500) {
+  live2dModel.expression(name);
+  setTimeout(() => {
+    // 恢复到当前情绪对应的表情
+    const expr = EMOTION_EXPRESSIONS[currentEmotion];
+    if (expr) {
+      live2dModel.expression(expr);
+    } else {
+      resetExpression();
+    }
+  }, ms);
+}
+
+function gazeWander() {
+  if (Date.now() - lastMouseMove < 8000) return; // 用户在动鼠标时不抢视线
+  const r = document.getElementById("live2d-canvas").getBoundingClientRect();
+  live2dModel.focus(Math.random() * r.width, Math.random() * r.height);
+}
+
+const IDLE_ACTIONS = [
+  ["nod", () => live2dModel.motion("nod").catch(() => {})],
+  ["tilt", () => live2dModel.motion("tilt").catch(() => {})],
+  ["sway", () => live2dModel.motion("sway").catch(() => {})],
+  ["shake", () => live2dModel.motion("shake").catch(() => {})],
+  ["expr:star_eyes", () => flashExpression("star_eyes")],
+  ["expr:closed_smile", () => flashExpression("closed_smile")],
+  ["expr:pout", () => flashExpression("pout")],
+  ["expr:sleepy", () => flashExpression("sleepy")],
+  ["expr:staff", () => flashExpression("staff", 5000)],
+  ["expr:coin", () => flashExpression("coin", 4000)],
+  ["gaze", gazeWander],
+];
+
+function scheduleIdleAction() {
+  const delay = 25000 + Math.random() * 35000; // 25~60s
+  setTimeout(() => {
+    try {
+      if (live2dModel && !sending) {
+        const [name, act] = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)];
+        act();
+        console.log("[idle] 随机待机动作:", name);
+      }
+    } catch (e) {
+      console.warn("[idle] 待机动作失败:", e);
+    }
+    scheduleIdleAction();
+  }, delay);
+}
+
+scheduleIdleAction();
 
 // 启动提示
 (async () => {

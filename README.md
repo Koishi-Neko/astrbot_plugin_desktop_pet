@@ -104,6 +104,11 @@ npm run build      # 产出独立 exe（src-tauri/target/release）
   - 模型：任意 Cubism 3/4 模型目录（含 `.moc3`、`model3.json`、贴图、`motions/`、`expressions/`），放到 `src/assets/live2d/chino/` 并把入口文件命名为 `chino.model3.json`；注意 **文件名与内部引用需为 ASCII**（Tauri 资产协议对非 ASCII 路径支持不佳）。
   - 渲染库（下载到 `src/vendor/`）：`pixi.js@6.5.x` 的 `pixi.min.js`、`pixi-live2d-display@0.4.0` 的 `cubism4.min.js`、Live2D 官方的 `live2dcubismcore.min.js`。
 - **情绪映射**：`src/app.js` 的 `EMOTION_EXPRESSIONS` 把 8 种情绪映射到模型表情（expression 名称），`null` 表示恢复默认表情；按你的模型实际表情名修改即可。
+- **程序化动作**：`pet_shell/tools/gen_motions.py` 可生成点头/摇头/歪头/摇摆/待机增强（idle_sway）等 motion3.json 并自动注册进模型，可自行修改曲线参数扩充更多动作。
+- **灵动待机系统**（`src/app.js`）：
+  - 视线跟随鼠标（点击穿透模式下自动失效）；
+  - 随机待机调度：每 25~60 秒随机触发小动作（nod/tilt/sway/shake）、短暂表情（星星眼/闭眼笑/鼓脸/困倦/法杖/提币）或视线游移；对话期间自动暂停。
+  - 注意：`model.expression()` 不传参会**随机**应用表情，恢复默认必须用 `resetExpression()`。
 - 模型只有动作没有表情时，可把 `playEmotionMotion` 改为调用 `model.motion(组名)`。
 
 ## 六、常见问题
