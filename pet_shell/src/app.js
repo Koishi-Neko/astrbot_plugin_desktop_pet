@@ -460,22 +460,35 @@ window.onClickThrough = (enabled) => {
 let lastMouseMove = 0;
 
 // 视线跟随鼠标（canvas 是 pointer-events:none，需手动转发坐标）
-// 窗口外 30px 缓冲区内可追踪；超出则清零视线目标，模型回正
-const GAZE_MARGIN = 30;
-
+// 注意：透明窗口的 mousemove 只在事件经过窗口不透明区域时派发，
+// 无法依赖"出界事件"回正，改用看门狗：无新事件 1.5s 自动回正。
 document.addEventListener("mousemove", (e) => {
   lastMouseMove = Date.now();
   if (!live2dModel) return;
   const r = document.getElementById("live2d-canvas").getBoundingClientRect();
   const x = e.clientX - r.left;
   const y = e.clientY - r.top;
-  if (x < -GAZE_MARGIN || y < -GAZE_MARGIN || x > r.width + GAZE_MARGIN || y > r.height + GAZE_MARGIN) {
-    // 出界回正：focus() 永远输出满幅方向，必须直接清零视线目标
-    live2dModel.internalModel.focusController.focus(0, 0);
-  } else {
+  if (x >= 0 && y >= 0 && x <= r.width && y <= r.height) {
     live2dModel.focus(x, y);
   }
 });
+
+function gazeRecenter() {
+  if (!live2dModel) return;
+  try {
+    live2dModel.internalModel.focusController.focus(0, 0);
+  } catch (e) {
+    /* 忽略 */
+  }
+}
+
+// 鼠标离开文档立即回正
+document.addEventListener("mouseleave", gazeRecenter);
+
+// 看门狗：鼠标静止或离开 1.5s 后回正
+setInterval(() => {
+  if (Date.now() - lastMouseMove > 1500) gazeRecenter();
+}, 500);
 
 function flashExpression(name, ms = 3500) {
   live2dModel.expression(name);
