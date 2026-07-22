@@ -6,3 +6,6 @@ dist/
 pet_shell/src-tauri/target/
 pet_shell/src-tauri/gen/
 **/config.local.json
+# Live2D 模型与第三方渲染库为受版权保护的素材，仅本地使用，不入库
+pet_shell/src/assets/live2d/
+pet_shell/src/vendor/

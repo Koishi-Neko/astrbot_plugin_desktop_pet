@@ -59,8 +59,80 @@ const EMOTION_FILES = {
 
 let currentEmotion = "平静";
 
+// ---------- Live2D ----------
+
+const LIVE2D_MODEL_URL = "assets/live2d/chino/chino.model3.json";
+let live2dModel = null;
+
+// 情绪 -> 模型表情（智乃模型 expressions/ 下的表情，null = 恢复默认表情）
+const EMOTION_EXPRESSIONS = {
+  "平静": null,
+  "高兴": "star_eyes",
+  "生气": "dark_face",
+  "害羞": "blush",
+  "惊讶": "oo_mouth",
+  "难过": "closed_happy",
+  "疑惑": "o_mouth",
+  "调皮": "heart_eyes",
+};
+
+async function initLive2D() {
+  try {
+    if (!window.PIXI || !PIXI.live2d || !PIXI.live2d.Live2DModel) return;
+    // 高倍缩小模型时开 mipmap，减少锯齿/模糊
+    PIXI.settings.MIPMAP_TEXTURES = PIXI.MIPMAP_MODES.ON;
+    const canvas = document.getElementById("live2d-canvas");
+    const pet = document.getElementById("pet");
+    const app = new PIXI.Application({
+      view: canvas,
+      transparent: true,
+      autoStart: true,
+      resizeTo: pet,
+      resolution: window.devicePixelRatio || 1, // 高分屏按物理像素渲染
+      autoDensity: true,
+    });
+    const model = await PIXI.live2d.Live2DModel.from(LIVE2D_MODEL_URL);
+    app.stage.addChild(model);
+    // 记录未缩放的本地尺寸（pivot 必须用本地坐标）
+    const localW = model.width;
+    const localH = model.height;
+
+    const fit = () => {
+      const w = pet.clientWidth;
+      const h = pet.clientHeight;
+      const scale = Math.min(w / localW, h / localH) * 0.98;
+      model.scale.set(scale);
+      model.pivot.set(localW / 2, localH);
+      model.x = w / 2;
+      model.y = h;
+    };
+    fit();
+    app.renderer.on("resize", fit);
+
+    live2dModel = model;
+    avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
+    model.motion("idle");
+    // 任何动作播完都回到 idle，形成循环
+    model.on("motionFinish", () => model.motion("idle"));
+  } catch (e) {
+    console.warn("Live2D 初始化失败，回退为静态立绘：", e);
+  }
+}
+
+function playEmotionMotion(label) {
+  if (!live2dModel) return;
+  const expr = EMOTION_EXPRESSIONS[label];
+  try {
+    // 不带参数调用 expression() 可恢复默认表情
+    live2dModel.expression(expr || undefined);
+  } catch (e) {
+    console.warn("切换表情失败：", label, e);
+  }
+}
+
 function setEmotion(label) {
   currentEmotion = EMOTION_FILES[label] ? label : "平静";
+  playEmotionMotion(currentEmotion);
   avatar.src = `assets/${EMOTION_FILES[currentEmotion]}.png`;
 }
 
@@ -189,6 +261,7 @@ avatar.parentElement.addEventListener("mouseup", () => {
   if (!dragMoved) {
     inputBar.classList.toggle("hidden");
     if (!inputBar.classList.contains("hidden")) chatInput.focus();
+    playEmotionMotion("高兴"); // 戳一戳桌宠
   }
 });
 
@@ -280,6 +353,7 @@ window.onClickThrough = (enabled) => {
 // 启动提示
 (async () => {
   await loadFileConfig();
+  initLive2D(); // 异步加载 Live2D，失败自动回退静态立绘
   if (!loadConfig().apiKey) {
     showBubble();
     queueType("你好呀！先在右键菜单「设置」里填好 AstrBot 地址和 API Key，我就能陪你聊天啦。");

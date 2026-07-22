@@ -11,6 +11,7 @@
 
   <div id="pet" data-tauri-drag-region>
     <img id="avatar" src="assets/calm.png" draggable="false" data-tauri-drag-region />
+    <canvas id="live2d-canvas"></canvas>
   </div>
 
   <div id="input-bar" class="hidden">
@@ -40,6 +41,9 @@
     <div id="cfg-message"></div>
   </div>
 
+  <script src="vendor/live2dcubismcore.min.js"></script>
+  <script src="vendor/pixi.min.js"></script>
+  <script src="vendor/cubism4.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

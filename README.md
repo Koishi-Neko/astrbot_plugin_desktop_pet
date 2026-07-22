@@ -88,14 +88,27 @@ npm run build      # 产出独立 exe（src-tauri/target/release）
 - **Ctrl+Shift+P**：切换点击穿透（穿透开启后窗口不接收任何鼠标事件，只能用快捷键或托盘菜单切回）。
 - **托盘图标**：切换穿透 / 退出。
 
-## 五、替换立绘
+## 五、立绘与 Live2D
 
-`pet_shell/src/assets/` 下按情绪命名：`平静.png`、`高兴.png`、`生气.png`、`害羞.png`、`惊讶.png`、`难过.png`、`疑惑.png`、`调皮.png`。用同名文件覆盖即可（建议透明背景 PNG，256×256 以上）。仓库内置的是脚本生成的占位图（`pet_shell/tools/gen_assets.py`）。
+### 静态立绘（兜底）
+
+`pet_shell/src/assets/` 下按情绪命名（英文文件名）：`calm.png`（平静）、`happy.png`（高兴）、`angry.png`（生气）、`shy.png`（害羞）、`surprised.png`（惊讶）、`sad.png`（难过）、`confused.png`（疑惑）、`playful.png`（调皮）。同名覆盖即可（建议透明背景 PNG，256×256 以上）。仓库内置的是脚本生成的占位图（`pet_shell/tools/gen_assets.py`）。
+
+### Live2D（推荐）
+
+桌宠优先尝试加载 `pet_shell/src/assets/live2d/chino/chino.model3.json`（Cubism 3/4 模型，pixi-live2d-display 渲染），加载失败自动回退静态立绘。
+
+- **模型自备**：Live2D 模型与渲染库（`src/assets/live2d/`、`src/vendor/`）涉及版权与 Live2D SDK 许可，**不包含在仓库中**（已 gitignore），请自行准备：
+  - 模型：任意 Cubism 3/4 模型目录（含 `.moc3`、`model3.json`、贴图、`motions/`、`expressions/`），放到 `src/assets/live2d/chino/` 并把入口文件命名为 `chino.model3.json`；注意 **文件名与内部引用需为 ASCII**（Tauri 资产协议对非 ASCII 路径支持不佳）。
+  - 渲染库（下载到 `src/vendor/`）：`pixi.js@6.5.x` 的 `pixi.min.js`、`pixi-live2d-display@0.4.0` 的 `cubism4.min.js`、Live2D 官方的 `live2dcubismcore.min.js`。
+- **情绪映射**：`src/app.js` 的 `EMOTION_EXPRESSIONS` 把 8 种情绪映射到模型表情（expression 名称），`null` 表示恢复默认表情；按你的模型实际表情名修改即可。
+- 模型只有动作没有表情时，可把 `playEmotionMotion` 改为调用 `model.motion(组名)`。
 
 ## 六、常见问题
 
 - **桌宠无回复**：先在设置面板点「测试连接」；再确认 AstrBot 日志里插件已加载（`web api registered`）。
 - **回复没有切换表情**：模型未按格式输出情绪标签时会用 `default_emotion` 兜底，属正常现象；可在人设里强化格式要求。
+- **Live2D 不显示**：打开 devtools（debug 构建自动弹出）看控制台；常见原因是模型路径含非 ASCII 字符、vendor 库缺失，或模型不是 Cubism 3/4 格式。
 - **远端 AstrBot**：把地址改成对应主机即可（注意 6185 端口的访问控制，API Key 即鉴权，请勿暴露到公网）。
 
 ## 许可
