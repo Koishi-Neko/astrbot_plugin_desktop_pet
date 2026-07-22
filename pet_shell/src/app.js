@@ -72,7 +72,7 @@ const EMOTION_EXPRESSIONS = {
   "害羞": "blush",
   "惊讶": "oo_mouth",
   "难过": "closed_happy",
-  "疑惑": "o_mouth",
+  "疑惑": "confused",
   "调皮": "closed_smile",
 };
 
@@ -333,17 +333,37 @@ document.addEventListener("mouseup", () => {
   }
 })();
 
-// 单击立绘：切换输入框
+// 单击立绘：戳一戳（随机动作/表情反馈）；双击：开合输入框
 let dragMoved = false;
 avatar.parentElement.addEventListener("mousedown", () => (dragMoved = false));
 avatar.parentElement.addEventListener("mousemove", () => (dragMoved = true));
 avatar.parentElement.addEventListener("mouseup", () => {
-  if (!dragMoved) {
-    inputBar.classList.toggle("hidden");
-    if (!inputBar.classList.contains("hidden")) chatInput.focus();
-    playEmotionMotion("高兴"); // 戳一戳桌宠
-  }
+  if (!dragMoved) poke();
 });
+avatar.parentElement.addEventListener("dblclick", () => {
+  inputBar.classList.toggle("hidden");
+  if (!inputBar.classList.contains("hidden")) chatInput.focus();
+});
+
+// 戳一戳：随机动作或短暂表情
+const POKE_MOTIONS = ["nod", "tilt", "sway", "shake"];
+const POKE_EXPRS = ["closed_smile", "pout", "blush", "o_surprised"];
+
+function poke() {
+  if (!live2dModel) {
+    playEmotionMotion("高兴");
+    return;
+  }
+  if (Math.random() < 0.6) {
+    const m = POKE_MOTIONS[Math.floor(Math.random() * POKE_MOTIONS.length)];
+    console.log("[poke]", m);
+    live2dModel.motion(m).catch(() => {});
+  } else {
+    const x = POKE_EXPRS[Math.floor(Math.random() * POKE_EXPRS.length)];
+    console.log("[poke] expr:", x);
+    flashExpression(x, 2500);
+  }
+}
 
 chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && chatInput.value.trim()) {
@@ -380,9 +400,13 @@ $("menu-toggle-input").addEventListener("click", () => {
   if (!inputBar.classList.contains("hidden")) chatInput.focus();
 });
 
+// 点击穿透：JS 侧记录状态，与 Rust 回调（快捷键/托盘）保持同步
+let clickThroughOn = false;
+
 $("menu-passthrough").addEventListener("click", () => {
-  // 实际切换由 Rust 侧快捷键/托盘完成，这里提示一下
-  showStatusTip("按 Ctrl+Shift+P 切换穿透", 2000);
+  invoke()("set_click_through", { enabled: !clickThroughOn }).catch((e) =>
+    showStatusTip("切换失败：" + e, 2000)
+  );
 });
 
 $("menu-settings").addEventListener("click", () => {
@@ -427,6 +451,7 @@ function showStatusTip(text, ms) {
 }
 
 window.onClickThrough = (enabled) => {
+  clickThroughOn = enabled;
   showStatusTip(enabled ? "穿透模式：Ctrl+Shift+P 恢复" : "已恢复交互", enabled ? 0 : 2000);
 };
 
@@ -471,7 +496,6 @@ const IDLE_ACTIONS = [
   ["expr:pout", () => flashExpression("pout")],
   ["expr:sleepy", () => flashExpression("sleepy")],
   ["expr:staff", () => flashExpression("staff", 5000)],
-  ["expr:coin", () => flashExpression("coin", 4000)],
   ["gaze", gazeWander],
 ];
 

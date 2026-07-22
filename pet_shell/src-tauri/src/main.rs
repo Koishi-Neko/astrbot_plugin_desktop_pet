@@ -167,7 +167,7 @@ fn main() {
             }
             // 全局快捷键 Ctrl+Shift+P 切换点击穿透（穿透开启后窗口收不到事件，只能靠它切回）
             app.global_shortcut().on_shortcut(
-                "Ctrl+Shift+P",
+                "CmdOrControl+Shift+P",
                 move |app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         toggle_click_through(app);

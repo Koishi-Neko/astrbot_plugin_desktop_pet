@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Live2D 动作实验室</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      display: flex; height: 100vh; background: #1e1e24; color: #eee;
+      font-family: "Microsoft YaHei", sans-serif; overflow: hidden;
+    }
+    #stage { flex: 1; display: flex; align-items: center; justify-content: center; }
+    canvas { background: #2a2a33; border-radius: 12px; }
+    #panel {
+      width: 260px; padding: 16px; overflow-y: auto; background: #26262e;
+      border-left: 1px solid #333;
+    }
+    h2 { font-size: 14px; margin: 12px 0 6px; color: #ff9ec7; }
+    h2:first-child { margin-top: 0; }
+    button {
+      display: inline-block; margin: 3px 4px 3px 0; padding: 6px 12px;
+      background: #3a3a46; color: #eee; border: 1px solid #555;
+      border-radius: 8px; font-size: 13px; cursor: pointer;
+    }
+    button:hover { background: #ff8fbf; color: #fff; border-color: #ff8fbf; }
+    #status { margin-top: 12px; font-size: 12px; color: #888; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div id="stage"><canvas id="canvas" width="500" height="640"></canvas></div>
+  <div id="panel">
+    <h2>动作 Motions</h2>
+    <div id="motions"></div>
+    <h2>表情 Expressions</h2>
+    <div id="exprs"></div>
+    <h2>操作</h2>
+    <button id="btn-reset">重置表情</button>
+    <button id="btn-idle">回待机</button>
+    <div id="status">加载中…</div>
+  </div>
+
+  <script src="../vendor/live2dcubismcore.min.js"></script>
+  <script src="../vendor/pixi.min.js"></script>
+  <script src="../vendor/cubism4.min.js"></script>
+  <script>
+    // 模型入口（换成你的模型目录）
+    const MODEL_URL = "../assets/live2d/chino/chino.model3.json";
+    const status = (t) => (document.getElementById("status").textContent = t);
+
+    (async () => {
+      try {
+        const app = new PIXI.Application({
+          view: document.getElementById("canvas"),
+          transparent: true,
+          autoStart: true,
+          width: 500,
+          height: 640,
+        });
+        const model = await PIXI.live2d.Live2DModel.from(MODEL_URL, {
+          autoInteract: false, // 实验室内不追踪鼠标，避免干扰动作判断
+        });
+        app.stage.addChild(model);
+        const lw = model.width, lh = model.height;
+        const scale = Math.min(500 / lw, 640 / lh) * 0.95;
+        model.scale.set(scale);
+        model.pivot.set(lw / 2, lh);
+        model.x = 250;
+        model.y = 640;
+        model.motion("idle_sway");
+        model.on("motionFinish", () => model.motion("idle_sway"));
+
+        // 从 model3.json 动态生成按钮
+        const settings = await (await fetch(MODEL_URL)).json();
+        const motions = Object.keys(settings.FileReferences.Motions || {});
+        const exprs = (settings.FileReferences.Expressions || []).map((e) => e.Name);
+
+        const motionsDiv = document.getElementById("motions");
+        motions.forEach((g) => {
+          const b = document.createElement("button");
+          b.textContent = g;
+          b.onclick = () => {
+            model.motion(g).catch(() => {});
+            status("播放动作: " + g);
+          };
+          motionsDiv.appendChild(b);
+        });
+
+        const exprsDiv = document.getElementById("exprs");
+        exprs.forEach((n) => {
+          const b = document.createElement("button");
+          b.textContent = n;
+          b.onclick = () => {
+            model.expression(n);
+            status("应用表情: " + n);
+          };
+          exprsDiv.appendChild(b);
+        });
+
+        document.getElementById("btn-reset").onclick = () => {
+          model.internalModel.motionManager.expressionManager.resetExpression();
+          status("已重置表情");
+        };
+        document.getElementById("btn-idle").onclick = () => {
+          model.motion("idle_sway").catch(() => {});
+          status("回到待机");
+        };
+        status(`就绪：${motions.length} 动作 / ${exprs.length} 表情`);
+      } catch (e) {
+        status("加载失败: " + e.message);
+        console.error(e);
+      }
+    })();
+  </script>
+</body>
+</html>

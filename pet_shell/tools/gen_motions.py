@@ -20,6 +20,15 @@ import sys
 
 FPS = 30
 
+# 动作幅度（角度，Cubism Angle 系参数量程 ±30）
+AMPLITUDES = {
+    "nod_angle_y": 20.0,      # 点头
+    "shake_angle_x": 20.0,    # 摇头
+    "tilt_angle_z": 16.0,     # 歪头
+    "sway_body_z": 7.0,       # 摇摆（身体，与头同向）
+    "sway_head_z": 10.0,      # 摇摆（头部，与身同向）
+}
+
 
 def sine_curve(param_id, duration, amplitude, cycles, phase=0.0):
     """按 FPS 采样正弦曲线，返回 Curves 条目。"""
@@ -31,6 +40,30 @@ def sine_curve(param_id, duration, amplitude, cycles, phase=0.0):
         segments += [round(t, 4), round(v, 4)]
         if i < n:
             segments.append(0)  # 线性插值
+    return {"Target": "Parameter", "Id": param_id, "Segments": segments}
+
+
+def _smoothstep(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+
+def damped_shake_curve(param_id, duration, amplitude, cycles, ramp_up=0.2, ramp_down=0.35):
+    """包络减幅振荡：同频率摇晃 cycles 个来回，渐入渐出，起止速度为零。"""
+    n = int(duration * FPS)
+    segments = []
+    for i in range(n + 1):
+        t = i / FPS
+        env = 1.0
+        if t < ramp_up:
+            env = _smoothstep(t / ramp_up)
+        elif t > duration - ramp_down:
+            env = _smoothstep((duration - t) / ramp_down)
+        # -cos 载波：从 0 起步先向负侧摆，同频率 cycles 个来回
+        v = amplitude * env * (-math.cos(2 * math.pi * cycles * t / duration))
+        segments += [round(t, 4), round(v, 4)]
+        if i < n:
+            segments.append(0)
     return {"Target": "Parameter", "Id": param_id, "Segments": segments}
 
 
@@ -72,13 +105,15 @@ def main():
     os.makedirs(motions_dir, exist_ok=True)
 
     generated = {
-        "nod": make_motion(1.2, [sine_curve("ParamAngleY", 1.2, 7.0, 2)]),
-        "shake": make_motion(1.4, [sine_curve("ParamAngleX", 1.4, 8.0, 2)]),
+        "nod": make_motion(1.4, [sine_curve("ParamAngleY", 1.4, AMPLITUDES["nod_angle_y"], 2)]),
+        "shake": make_motion(2.0, [damped_shake_curve("ParamAngleX", 2.0, AMPLITUDES["shake_angle_x"], 3)]),
         "tilt": make_motion(1.6, [keyframe_curve(
-            "ParamAngleZ", [(0, 0), (0.4, 12), (1.0, 12), (1.6, 0)])]),
-        "sway": make_motion(2.4, [
-            sine_curve("ParamBodyAngleZ", 2.4, 4.0, 1),
-            sine_curve("ParamAngleZ", 2.4, -3.0, 1),
+            "ParamAngleZ", [(0, 0), (0.4, AMPLITUDES["tilt_angle_z"]),
+                            (1.0, AMPLITUDES["tilt_angle_z"]), (1.6, 0)])]),
+        # 左右侧倾摇摆：头身同向，参考视线跟随的倾角幅度，3 个来回
+        "sway": make_motion(3.0, [
+            damped_shake_curve("ParamAngleZ", 3.0, AMPLITUDES["sway_head_z"], 3),
+            damped_shake_curve("ParamBodyAngleZ", 3.0, AMPLITUDES["sway_body_z"], 3),
         ]),
     }
 
