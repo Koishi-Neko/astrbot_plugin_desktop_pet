@@ -67,7 +67,8 @@
         model.x = 250;
         model.y = 640;
         model.motion("idle_sway");
-        model.on("motionFinish", () => model.motion("idle_sway"));
+        // motionFinish 只在 internalModel.motionManager 上派发；FORCE 接回防优先级竞争
+        model.internalModel.motionManager.on("motionFinish", () => model.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {}));
 
         // 从 model3.json 动态生成按钮
         const settings = await (await fetch(MODEL_URL)).json();
@@ -79,7 +80,8 @@
           const b = document.createElement("button");
           b.textContent = g;
           b.onclick = () => {
-            model.motion(g).catch(() => {});
+            // FORCE 优先级：打断循环中的 idle_sway / coin_sway 立即播放
+            model.motion(g, 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
             status("播放动作: " + g);
           };
           motionsDiv.appendChild(b);
@@ -101,7 +103,7 @@
           status("已重置表情");
         };
         document.getElementById("btn-idle").onclick = () => {
-          model.motion("idle_sway").catch(() => {});
+          model.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
           status("回到待机");
         };
         status(`就绪：${motions.length} 动作 / ${exprs.length} 表情`);

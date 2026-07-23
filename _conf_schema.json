@@ -60,5 +60,11 @@
         "hint": "1 为基准，越大越慢。",
         "type": "float",
         "default": 1.0
+    },
+    "pet_session_id": {
+        "description": "桌宠 webchat 会话 ID",
+        "hint": "桌宠经 open API 对话时使用的 webchat 会话标识。该会话的 LLM 请求会被自动追加情绪/日语配音稿输出格式要求；在 WebUI 聊天页可给此会话选择人格。",
+        "type": "string",
+        "default": "desktop_pet"
     }
 }

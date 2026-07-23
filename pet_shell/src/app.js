@@ -1,7 +1,6 @@
 /* AstrBotPet 桌宠壳前端逻辑 */
 
 const DEFAULT_BASE_URL = "http://localhost:6185/api/v1/plugins/extensions";
-const HISTORY_LIMIT = 10; // 与插件端 history_turns 对齐
 
 const $ = (id) => document.getElementById(id);
 const avatar = $("avatar");
@@ -112,8 +111,15 @@ async function initLive2D() {
     live2dModel = model;
     avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
     model.motion("idle_sway"); // 待机增强版（原 idle + 低频摆动）
-    // 任何动作播完都回到待机循环
-    model.on("motionFinish", () => model.motion("idle_sway"));
+    // 任何动作播完都回到待机循环；长待机演出自然结束时复位演出状态
+    // 注意两点：
+    // 1. motionFinish 只在 internalModel.motionManager 上派发（Live2DModel 不转发）；
+    // 2. 必须用 FORCE：被播完的动作若是 FORCE 优先级，此时当前优先级尚未重置，
+    //    NORMAL 会被优先级检查拒绝，导致 idle_sway 接不上
+    model.internalModel.motionManager.on("motionFinish", () => {
+      onLongIdleFinished();
+      model.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+    });
   } catch (e) {
     console.warn("Live2D 初始化失败，回退为静态立绘：", e);
   }
@@ -143,10 +149,22 @@ function playEmotionMotion(label) {
   }
 }
 
+let emotionResetTimer = null;
+
 function setEmotion(label) {
   currentEmotion = EMOTION_FILES[label] ? label : "平静";
   playEmotionMotion(currentEmotion);
   avatar.src = `assets/${EMOTION_FILES[currentEmotion]}.png`;
+  // 非默认情绪 8s 后自动回正为默认表情
+  if (emotionResetTimer) clearTimeout(emotionResetTimer);
+  if (EMOTION_EXPRESSIONS[currentEmotion]) {
+    emotionResetTimer = setTimeout(() => {
+      emotionResetTimer = null;
+      currentEmotion = "平静";
+      resetExpression();
+      avatar.src = `assets/${EMOTION_FILES["平静"]}.png`;
+    }, 8000);
+  }
 }
 
 avatar.addEventListener("error", () => {
@@ -306,13 +324,59 @@ function scheduleBubbleHide() {
   bubbleHideTimer = setTimeout(hideBubble, 15000);
 }
 
-// ---------- 对话 ----------
+// ---------- 对话（管道模式：经 AstrBot open API /chat，享受人格/记忆/日志） ----------
 
-const history = [];
+const PET_SESSION_ID = "desktop_pet"; // 需与插件配置 pet_session_id 一致
 let sending = false;
 
 const invoke = () => window.__TAURI__.core.invoke;
 const listenEvent = (name, cb) => window.__TAURI__.event.listen(name, cb);
+
+// open API 根地址：base_url 是 .../api/v1/plugins/extensions，去掉后两段得到 .../api/v1
+function openApiRoot(baseUrl) {
+  return baseUrl.replace(/\/plugins\/extensions$/, "");
+}
+
+const PET_EMOTION_TAG = /^\s*【([^】]{1,8})】\s*/;
+const PET_JP_TAG = /【\s*JP\s*】/i;
+const SENTENCE_RE = /[^。！？!?；;\n]+[。！？!?；;\n]*/g;
+
+function splitSentences(text) {
+  return (text.match(SENTENCE_RE) || []).map((s) => s.trim()).filter(Boolean);
+}
+
+// 解析「【情绪】中文正文【JP】日语配音稿」
+function parsePetReply(text) {
+  let emotion = "平静";
+  let body = text || "";
+  const m = body.match(PET_EMOTION_TAG);
+  if (m) {
+    const label = m[1].trim();
+    emotion = EMOTION_FILES[label] ? label : "平静";
+    body = body.slice(m[0].length);
+  }
+  const parts = body.split(PET_JP_TAG);
+  return {
+    emotion,
+    zh: (parts[0] || "").trim(),
+    jp: (parts[1] || "").trim(),
+  };
+}
+
+// 逐句调用插件 TTS 并顺序播放（后台执行，不阻塞气泡）
+async function speakJp(jpText, cfg) {
+  const ttsUrl = cfg.baseUrl + "/desktop_pet/pet/tts";
+  for (const seg of splitSentences(jpText)) {
+    try {
+      const resp = await invoke()("pet_tts", { url: ttsUrl, apiKey: cfg.apiKey, text: seg });
+      const d = JSON.parse(resp);
+      if (d.audio) enqueueAudio(d.audio);
+      else console.warn("tts 无音频:", d);
+    } catch (e) {
+      console.warn("tts 合成失败:", e);
+    }
+  }
+}
 
 async function sendChat(text) {
   if (sending || !text.trim()) return;
@@ -330,55 +394,42 @@ async function sendChat(text) {
 
   let full = "";
   let unlisten = null;
-  // 等待 SSE 流结束的 Promise：stream_end / connect_error 时收尾
   let resolveFinished;
   const finished = new Promise((resolve) => (resolveFinished = resolve));
   unlisten = await listenEvent("pet-chat", (ev) => {
     const data = ev.payload || {};
-    if (data.type === "emotion") {
-      setEmotion(data.label);
-    } else if (data.type === "delta") {
-      if (!full) {
-        // 首个正文帧到达，清掉 "…" 占位符
-        typeQueue.length = 0;
-        bubbleText.textContent = "";
-      }
-      full += data.text;
-      queueType(data.text);
-    } else if (data.type === "error") {
-      console.warn("pet backend error:", data.message);
-    } else if (data.type === "audio") {
-      if (voiceEnabled) enqueueAudio(data.data);
+    if (data.type === "complete") {
+      full = typeof data.data === "string" ? data.data : full;
     } else if (data.type === "connect_error") {
       resolveFinished({ error: data.message });
-    } else if (data.type === "stream_end") {
-      scheduleBubbleHide();
+    } else if (data.type === "end") {
       resolveFinished({ error: null });
     }
+    // session_id / run_started / plain / agent_stats / message_saved 等帧无需处理
   });
 
   try {
-    await invoke()("pet_chat", {
-      baseUrl: cfg.baseUrl,
+    await invoke()("pet_open_chat", {
+      url: openApiRoot(cfg.baseUrl) + "/chat",
       apiKey: cfg.apiKey,
       message: text,
-      history: history.slice(-HISTORY_LIMIT * 2),
+      sessionId: PET_SESSION_ID,
+      username: PET_SESSION_ID,
     });
     const { error } = await finished;
 
-    // 清掉占位符（如果还没有内容）
-    if (!full) {
-      typeQueue.length = 0;
-      bubbleText.textContent = "";
-    }
+    // 清掉 "…" 占位符
+    typeQueue.length = 0;
+    bubbleText.textContent = "";
 
-    if (error) {
-      throw new Error(error);
-    }
+    if (error) throw new Error(error);
+    if (!full) throw new Error("AstrBot 返回了空内容");
 
-    history.push({ role: "user", content: text });
-    if (full) history.push({ role: "assistant", content: full });
-    while (history.length > HISTORY_LIMIT * 2) history.shift();
+    const { emotion, zh, jp } = parsePetReply(full);
+    setEmotion(emotion);
+    for (const seg of splitSentences(zh || full)) queueType(seg);
+    scheduleBubbleHide();
+    if (voiceEnabled && jp) speakJp(jp, cfg);
   } catch (err) {
     console.error(err);
     typeQueue.length = 0;
@@ -644,19 +695,21 @@ function gazeWander() {
 
 let coinIdleTimer = null;
 let longIdleActive = false; // 长待机演出中：暂停随机调度、戳一戳只闪表情
-let lastChatAt = Date.now(); // 最近一次对话时间，24s 无对话保底触发演出
-const LONG_IDLE_TRIGGER_MS = 24000;
+let lastChatAt = Date.now(); // 最近一次对话时间，25s 无对话保底触发演出
+const LONG_IDLE_TRIGGER_MS = 25000;
 
-// 长待机演出只持续 45s，由定时器自动结束；对话/戳一戳均不打断
+// 长待机演出为 60s 单次动作（末尾 4s 曲线内淡出），播完经 motionFinish 平滑回待机；
+// 对话/戳一戳均不打断
 function enterLongIdle() {
   longIdleActive = true;
   console.log("[idle] 进入长待机演出");
   live2dModel.motion("coin_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
   clearTimeout(coinIdleTimer);
-  coinIdleTimer = setTimeout(exitLongIdle, 45000);
+  // 兜底：正常情况下由 motionFinish 复位，此处防止意外卡死
+  coinIdleTimer = setTimeout(exitLongIdle, 62000);
 }
 
-// 保底触发：24s 无对话自动进入演出（对话中与演出中不触发）
+// 保底触发：25s 无对话自动进入演出（对话中与演出中不触发）
 setInterval(() => {
   if (live2dModel && !sending && !longIdleActive && Date.now() - lastChatAt > LONG_IDLE_TRIGGER_MS) {
     enterLongIdle();
@@ -671,6 +724,14 @@ function exitLongIdle() {
   if (live2dModel) {
     live2dModel.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
   }
+}
+
+// 演出动作自然播完：复位状态（idle_sway 由 motionFinish 处理器接回）
+function onLongIdleFinished() {
+  if (!longIdleActive) return;
+  longIdleActive = false;
+  console.log("[idle] 长待机演出自然结束");
+  clearTimeout(coinIdleTimer);
 }
 
 const IDLE_ACTIONS = [

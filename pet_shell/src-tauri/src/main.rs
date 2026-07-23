@@ -150,6 +150,108 @@ async fn pet_health(base_url: String, api_key: String) -> Result<String, String>
     }
 }
 
+/// 管道模式对话：POST AstrBot open API /api/v1/chat（绝对 URL 由前端给出），
+/// SSE 帧原样以 "pet-chat" 事件推给前端。
+#[tauri::command]
+async fn pet_open_chat(
+    window: tauri::WebviewWindow,
+    url: String,
+    api_key: String,
+    message: String,
+    session_id: String,
+    username: String,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn(async move {
+        let body = serde_json::json!({
+            "message": message,
+            "session_id": session_id,
+            "username": username,
+        });
+
+        let client = reqwest::Client::new();
+        let resp = match client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("X-API-Key", &api_key)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = window.emit(
+                    "pet-chat",
+                    serde_json::json!({"type": "connect_error", "message": e.to_string()}),
+                );
+                return;
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let _ = window.emit(
+                "pet-chat",
+                serde_json::json!({"type": "connect_error", "message": format!("HTTP {status}: {text}")}),
+            );
+            return;
+        }
+
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(idx) = buf.find("\n\n") {
+                        let frame = buf[..idx].trim().to_string();
+                        buf.drain(..idx + 2);
+                        // ": heartbeat" 等注释帧没有 data: 前缀，自然被跳过
+                        if let Some(data) = frame.strip_prefix("data:") {
+                            if let Ok(json) =
+                                serde_json::from_str::<serde_json::Value>(data.trim())
+                            {
+                                let _ = window.emit("pet-chat", json);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = window.emit(
+                        "pet-chat",
+                        serde_json::json!({"type": "connect_error", "message": e.to_string()}),
+                    );
+                    return;
+                }
+            }
+        }
+        let _ = window.emit("pet-chat", serde_json::json!({"type": "stream_end"}));
+    });
+    Ok(())
+}
+
+/// TTS 合成：POST 插件 /pet/tts，返回响应文本（JSON，含 base64 音频）。
+#[tauri::command]
+async fn pet_tts(url: String, api_key: String, text: String) -> Result<String, String> {
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", &api_key)
+        .json(&serde_json::json!({"text": text}))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(format!("HTTP {status}: {text}"))
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -158,7 +260,9 @@ fn main() {
             quit_app,
             resize_window,
             pet_chat,
-            pet_health
+            pet_health,
+            pet_open_chat,
+            pet_tts
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

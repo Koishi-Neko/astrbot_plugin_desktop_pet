@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>coin_sway 参数记录探针</title></head>
+<body>
+<canvas id="canvas" width="240" height="320"></canvas>
+<pre id="log">loading...</pre>
+<script src="../vendor/live2dcubismcore.min.js"></script>
+<script src="../vendor/pixi.min.js"></script>
+<script src="../vendor/cubism4.min.js"></script>
+<script>
+  const rec = [];
+  let t0 = null;
+  let finished = false;
+
+  function log(t) { document.getElementById("log").textContent = t; }
+
+  async function report(done) {
+    try {
+      await fetch("/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ done, samples: rec }),
+      });
+      log("report sent, done=" + done + ", samples=" + rec.length);
+    } catch (e) {
+      log("report failed: " + e);
+    }
+  }
+
+  (async () => {
+    try {
+      const app = new PIXI.Application({
+        view: document.getElementById("canvas"),
+        transparent: true,
+        width: 240,
+        height: 320,
+      });
+      // 无头浏览器会节流 rAF 导致 ticker 停摆；改为 setInterval 手动驱动渲染循环
+      app.ticker.stop();
+      setInterval(() => app.ticker.update(performance.now()), 16);
+      const model = await PIXI.live2d.Live2DModel.from("../assets/live2d/chino/chino.model3.json", {
+        autoInteract: false,
+      });
+      app.stage.addChild(model);
+      model.scale.set(Math.min(240 / model.width, 320 / model.height) * 0.9);
+      model.pivot.set(model.width / 2, model.height);
+      model.x = 120; model.y = 320;
+
+      const core = model.internalModel.coreModel;
+      let rafCount = 0;
+      const rafTick = () => { rafCount++; requestAnimationFrame(rafTick); };
+      requestAnimationFrame(rafTick);
+      model.internalModel.motionManager.on("motionFinish", () => {
+        finished = true;
+        report(true);
+      });
+
+      log("model loaded, starting coin_sway");
+      t0 = performance.now();
+      model.motion("coin_sway", 0, PIXI.live2d.MotionPriority.FORCE)
+        .then((ok) => { rec.push({ t: 0, evt: "motion_start_result", ok }); })
+        .catch((e) => { rec.push({ t: 0, evt: "motion_start_error", err: String(e) }); });
+
+      setInterval(() => {
+        const t = (performance.now() - t0) / 1000;
+        let angleZ = null, p149 = null, bodyX = null;
+        try { angleZ = core.getParameterValueById("ParamAngleZ"); } catch (e) {}
+        try { p149 = core.getParameterValueById("Param149"); } catch (e) {}
+        try { bodyX = core.getParameterValueById("ParamBodyAngleX"); } catch (e) {}
+        rec.push({ t: +t.toFixed(2), angleZ: +(angleZ ?? NaN).toFixed(3), p149: +(p149 ?? NaN).toFixed(3), bodyX: +(bodyX ?? NaN).toFixed(3), raf: rafCount });
+        log("recording t=" + t.toFixed(1) + "s raf=" + rafCount + (finished ? " (finished)" : ""));
+      }, 250);
+
+      // 75s 兜底上报
+      setTimeout(() => { if (!finished) report(false); }, 75000);
+    } catch (e) {
+      log("init failed: " + e.message);
+      rec.push({ evt: "init_error", err: String(e && e.message) });
+      report(false);
+    }
+  })();
+</script>
+</body>
+</html>

@@ -96,6 +96,22 @@ def envelope_sine_curve(param_id, duration, amplitude, env_base=0.65, env_amp=0.
     return {"Target": "Parameter", "Id": param_id, "Segments": segments}
 
 
+def apply_fade_out(curve, duration, fade_len=4.0):
+    """给曲线末尾叠加淡出包络：fade_len 秒内按 smoothstep 收归 0，消除动作结束的割裂感。"""
+    fade_start = duration - fade_len
+    segs = curve["Segments"]
+    out = []
+    for i in range(0, len(segs), 3):
+        t, v = segs[i], segs[i + 1]
+        if t > fade_start:
+            k = max(0.0, (duration - t) / fade_len)
+            v *= _smoothstep(k)
+        out += [round(t, 4), round(v, 4)]
+        if i + 2 < len(segs):
+            out.append(segs[i + 2])
+    return {"Target": curve["Target"], "Id": curve["Id"], "Segments": out}
+
+
 def make_motion(duration, curves, loop=False):
     point_count = sum((len(c["Segments"]) + 1) // 3 + 1 for c in curves)
     return {
@@ -149,17 +165,19 @@ def main():
         sine_curve("ParamAngleX", 6.0, 1.0, 2),
     ], loop=True)
 
-    # coin_sway：复合长待机动作（8s 循环）
-    # - Param149(提币手部形态)：1s 淡入后全程保持
-    # - 头部/上身：整周期慢摆，幅度包络 中→大→中→小→中
-    # - ParamAngleX 微幅点头保持灵动感；呼吸交给框架自动系统，不做曲线
-    generated["coin_sway"] = make_motion(4.8, idle_curves + [
-        keyframe_curve("Param149", [(0, 0), (1.0, 1.0), (4.8, 1.0)]),
-        envelope_sine_curve("ParamAngleZ", 4.8, 12.0),
-        envelope_sine_curve("ParamBodyAngleZ", 4.8, 11.0),
-        envelope_sine_curve("ParamBodyAngleX", 4.8, 5.5, cycles=2),  # 身体轻微摇感
-        sine_curve("ParamAngleX", 4.8, 1.0, 2),
-    ], loop=True)
+    # coin_sway：60s 单次长待机演出（不循环），末尾 8s 曲线内淡出，平滑接回待机
+    # - Param149(提币手部形态)：1s 淡入保持，52s 起 8s 淡出放下
+    # - 头部/上身：整周期慢摆，幅度包络 中→大→中→小→中，末 8s 幅度渐收至 0
+    # - 播完自然触发 motionFinish 回 idle_sway，无割裂
+    COIN_DURATION = 60.0
+    COIN_FADE = 8.0
+    generated["coin_sway"] = make_motion(COIN_DURATION, idle_curves + [
+        keyframe_curve("Param149", [(0, 0), (1.0, 1.0), (COIN_DURATION - COIN_FADE, 1.0), (COIN_DURATION, 0)]),
+        apply_fade_out(envelope_sine_curve("ParamAngleZ", COIN_DURATION, 12.0, cycles=12), COIN_DURATION, COIN_FADE),
+        apply_fade_out(envelope_sine_curve("ParamBodyAngleZ", COIN_DURATION, 11.0, cycles=12), COIN_DURATION, COIN_FADE),
+        apply_fade_out(envelope_sine_curve("ParamBodyAngleX", COIN_DURATION, 5.5, cycles=24), COIN_DURATION, COIN_FADE),  # 身体轻微摇感
+        apply_fade_out(sine_curve("ParamAngleX", COIN_DURATION, 1.0, 25), COIN_DURATION, COIN_FADE),  # 微幅点头保持灵动感
+    ], loop=False)
 
     for name, motion in generated.items():
         out = os.path.join(motions_dir, f"{name}.motion3.json")

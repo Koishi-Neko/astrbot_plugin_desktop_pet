@@ -27,6 +27,8 @@ from collections.abc import AsyncGenerator
 
 import aiohttp
 from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.api.web import request
 from starlette.responses import JSONResponse, StreamingResponse
@@ -47,12 +49,13 @@ EMOTION_INSTRUCTION = (
 )
 
 EMOTION_INSTRUCTION_TTS = (
-    "\n\n【输出格式要求】每次回复必须以情绪标签开头，格式为「【情绪】中文正文【JP】日语配音稿」，"
-    "情绪只能从以下列表中选择一个：{emotions}。"
-    "中文正文要口语化、简短（1~3 句），就像桌宠气泡里说的话。"
-    "【JP】之后紧接与中文正文意思对应的日语配音稿：必须是纯日语口语短句，"
-    "不含中文、不含任何方括号标记，用于语音合成朗读。"
-    "不要使用 markdown、列表或代码块，"
+    "\n\n【输出格式要求·必须严格遵守】每次回复必须同时包含以下三部分，缺一不可："
+    "①情绪标签：回复以「【情绪】」开头，情绪只能从以下列表中选择一个：{emotions}；"
+    "②中文正文：口语化、简短（1~3 句），就像桌宠气泡里说的话；"
+    "③日语配音稿：以「【JP】」开头，紧接与中文正文意思对应的日语，必须是纯日语口语短句，"
+    "用于语音合成朗读，不含中文、不含任何方括号标记。"
+    "完整格式示例：「【高兴】今天也好想你呀，主人！【JP】今日も会いたかったよ、ご主人様！」"
+    "禁止省略【JP】部分。不要使用 markdown、列表或代码块，"
     "除开头的情绪标签和【JP】外不要输出任何其他方括号标记。"
 )
 
@@ -77,7 +80,7 @@ class DesktopPetBridge(Star):
             "desktop_pet/pet/chat",
             self.chat,
             ["POST"],
-            "桌宠对话接口（SSE 流式）",
+            "桌宠对话接口（SSE 流式，旧版直连模式，保留作回退）",
         )
         self.context.register_web_api(
             "desktop_pet/pet/health",
@@ -85,7 +88,21 @@ class DesktopPetBridge(Star):
             ["GET"],
             "桌宠接口探活",
         )
-        logger.info("[desktop_pet] web api registered: desktop_pet/pet/chat, desktop_pet/pet/health")
+        self.context.register_web_api(
+            "desktop_pet/pet/tts",
+            self.tts,
+            ["POST"],
+            "桌宠 TTS 合成接口（管道模式下由壳端按句调用）",
+        )
+        self.context.register_web_api(
+            "desktop_pet/pet/personas",
+            self.personas,
+            ["GET"],
+            "列出 AstrBot 人格",
+        )
+        logger.info(
+            "[desktop_pet] web api registered: desktop_pet/pet/chat, health, tts, personas"
+        )
 
     async def terminate(self):
         logger.info("[desktop_pet] plugin terminated")
@@ -101,7 +118,60 @@ class DesktopPetBridge(Star):
             "default_provider_available": prov is not None,
             "emotions": EMOTIONS,
             "tts_enabled": self._tts_enabled(),
+            "pet_session_id": self._pet_session_id(),
         }
+
+    async def tts(self):
+        """TTS 合成：POST {"text": "日语文本"} -> {"audio": "<base64 wav>"}"""
+        raw = await request.body()
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            body = {}
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "text is required"}, status_code=400)
+        if not self._tts_enabled():
+            return JSONResponse({"error": "tts is disabled"}, status_code=400)
+        audio = await self._synthesize(text)
+        if audio is None:
+            return JSONResponse({"error": "synthesize failed"}, status_code=502)
+        return {"audio": audio, "format": "wav"}
+
+    async def personas(self):
+        """列出 AstrBot 人格（供桌宠选用参考）。"""
+        mgr = self.context.persona_manager
+        out = []
+        try:
+            for p in mgr.personas_v3 or []:
+                name = p.get("name") if isinstance(p, dict) else getattr(p, "name", None)
+                prompt = p.get("prompt") if isinstance(p, dict) else getattr(p, "prompt", "")
+                if name:
+                    out.append({"name": name, "prompt_preview": (prompt or "")[:80]})
+        except Exception as e:
+            logger.warning(f"[desktop_pet] list personas failed: {e}")
+        return {"default": mgr.default_persona, "personas": out}
+
+    # ---------- 管道模式：给桌宠 webchat 会话追加输出格式要求 ----------
+
+    @filter.on_llm_request()
+    async def inject_pet_format(self, event: AstrMessageEvent, req: ProviderRequest):
+        umo = event.unified_msg_origin or ""
+        sid = self._pet_session_id()
+        # 桌宠会话 umo 形如 webchat:FriendMessage:webchat!{username}!{conversation_id}
+        if not (umo.startswith("webchat:") and umo.endswith(f"!{sid}")):
+            return
+        tpl = EMOTION_INSTRUCTION_TTS if self._tts_enabled() else EMOTION_INSTRUCTION
+        req.system_prompt = (req.system_prompt or "") + tpl.format(
+            emotions="、".join(EMOTIONS)
+        )
+        if self._tts_enabled():
+            # 长人格 prompt 会稀释 system 侧格式要求，在用户消息末尾再提醒一次关键格式
+            reminder = (
+                "\n（格式提醒：本次回复必须包含【情绪】中文正文和【JP】日语配音稿三部分，"
+                "【JP】为纯日语，缺一不可。）"
+            )
+            req.prompt = (req.prompt or "") + reminder
 
     async def chat(self):
         raw = await request.body()
@@ -129,6 +199,9 @@ class DesktopPetBridge(Star):
 
     def _tts_enabled(self) -> bool:
         return bool(self.config.get("tts_enabled", False))
+
+    def _pet_session_id(self) -> str:
+        return str(self.config.get("pet_session_id") or "desktop_pet").strip() or "desktop_pet"
 
     def _build_system_prompt(self) -> str:
         persona = str(self.config.get("persona") or DEFAULT_PERSONA).strip()
