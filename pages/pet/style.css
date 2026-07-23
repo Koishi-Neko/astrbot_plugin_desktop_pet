@@ -1,0 +1,78 @@
+body {
+  margin: 0;
+  padding: 16px;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: transparent;
+  color: #333;
+}
+.page { max-width: 720px; margin: 0 auto; }
+h1 { font-size: 18px; margin: 4px 0 14px; }
+.card {
+  background: #fff;
+  border: 1px solid #e3e3e8;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #d4637f;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.label { width: 150px; flex-shrink: 0; color: #666; }
+.checkbox-row { cursor: pointer; }
+input[type="text"], select {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  max-width: 340px;
+}
+input[type="range"] { flex: 1; max-width: 300px; }
+.btn {
+  padding: 6px 14px;
+  border: 1px solid #d4637f;
+  background: #fff;
+  color: #d4637f;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover { background: #d4637f; color: #fff; }
+.btn.primary { background: #d4637f; color: #fff; }
+.btn.primary:hover { background: #b84f69; }
+.btn.small { padding: 2px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.kv { font-size: 13px; line-height: 1.9; white-space: pre-wrap; }
+.kv .ok { color: #2a9d52; }
+.kv .bad { color: #d33; }
+.msg { font-size: 12px; color: #888; }
+.warn { font-size: 12px; color: #c07b00; margin: 4px 0; }
+.mono { font-family: Consolas, monospace; font-size: 13px; width: 40px; }
+.hidden { display: none; }
+audio { width: 100%; margin-top: 8px; }
+@media (prefers-color-scheme: dark) {
+  body { color: #ddd; }
+  .card { background: #26262e; border-color: #3a3a46; }
+  .label { color: #aaa; }
+  input[type="text"], select {
+    background: #1e1e24; color: #eee; border-color: #555;
+  }
+  .btn { background: #1e1e24; }
+  .btn:hover { background: #d4637f; }
+  .btn.primary { background: #d4637f; }
+}
