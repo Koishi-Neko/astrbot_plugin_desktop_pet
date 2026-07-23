@@ -252,6 +252,42 @@ async fn pet_tts(url: String, api_key: String, text: String) -> Result<String, S
     }
 }
 
+// ---------- SBV2 语音服务控制（停止可释放 ~4.3GB 显存） ----------
+
+#[cfg(windows)]
+fn run_wsl(cmd: &str) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let out = std::process::Command::new("wsl")
+        .args(["-e", "bash", "-lc", cmd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // is-active 在服务停止时退出码为 3，但 stdout 仍有 "inactive"
+    if out.status.success() || !stdout.is_empty() {
+        Ok(stdout)
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+#[tauri::command]
+fn sbv2_status() -> Result<String, String> {
+    run_wsl("systemctl is-active sbv2-tts")
+}
+
+#[tauri::command]
+fn sbv2_service(action: String) -> Result<String, String> {
+    let act = match action.as_str() {
+        "start" | "stop" => action,
+        _ => return Err("action 只能是 start/stop".into()),
+    };
+    run_wsl(&format!(
+        "systemctl {act} sbv2-tts; systemctl is-active sbv2-tts"
+    ))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -262,7 +298,9 @@ fn main() {
             pet_chat,
             pet_health,
             pet_open_chat,
-            pet_tts
+            pet_tts,
+            sbv2_status,
+            sbv2_service
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

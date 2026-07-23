@@ -534,9 +534,10 @@ document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   settings.classList.add("hidden");
   menu.classList.remove("hidden");
-  const w = 190, h = 140;
+  const w = 190, h = 170;
   menu.style.left = Math.min(e.clientX, window.innerWidth - w) + "px";
   menu.style.top = Math.min(e.clientY, window.innerHeight - h) + "px";
+  refreshTtsServiceLabel();
 });
 
 document.addEventListener("click", (e) => {
@@ -563,6 +564,34 @@ $("menu-passthrough").addEventListener("click", () => {
   invoke()("set_click_through", { enabled: !clickThroughOn }).catch((e) =>
     showStatusTip("切换失败：" + e, 2000)
   );
+});
+
+// SBV2 语音服务开关：停止可释放 ~4.3GB 显存（高负荷任务时用）
+let ttsServiceOn = true;
+
+async function refreshTtsServiceLabel() {
+  try {
+    const st = (await invoke()("sbv2_status", {})).trim();
+    ttsServiceOn = st === "active";
+    if (!ttsServiceOn) voiceEnabled = false;
+  } catch {}
+  $("menu-tts-service").textContent = ttsServiceOn
+    ? "语音服务：开（点击释放显存）"
+    : "语音服务：关（点击恢复）";
+}
+
+$("menu-tts-service").addEventListener("click", async () => {
+  menu.classList.add("hidden");
+  showStatusTip(ttsServiceOn ? "正在停止语音服务…" : "正在启动语音服务（约 30~60 秒）…", 120000);
+  try {
+    const st = (await invoke()("sbv2_service", { action: ttsServiceOn ? "stop" : "start" })).trim();
+    ttsServiceOn = st === "active";
+    voiceEnabled = ttsServiceOn ? localStorage.getItem("pet_voice") !== "0" : false;
+    refreshTtsServiceLabel();
+    showStatusTip(ttsServiceOn ? "语音服务已恢复（首次合成会慢一些）" : "语音服务已停止，显存已释放", 3000);
+  } catch (e) {
+    showStatusTip("语音服务操作失败：" + e, 4000);
+  }
 });
 
 $("menu-settings").addEventListener("click", () => {
