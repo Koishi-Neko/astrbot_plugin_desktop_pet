@@ -24,5 +24,41 @@
         "hint": "每次请求最多携带的最近对话轮数（桌宠壳会在客户端保存历史并随请求发送）。0 表示不带历史。",
         "type": "int",
         "default": 10
+    },
+    "tts_enabled": {
+        "description": "启用语音合成（TTS）",
+        "hint": "开启后模型回复会附带日语配音稿，插件调用 Style-Bert-VITS2 合成语音并随 SSE 流返回音频帧。",
+        "type": "bool",
+        "default": false
+    },
+    "tts_base_url": {
+        "description": "Style-Bert-VITS2 服务地址",
+        "hint": "SBV2 server_fastapi 的地址。WSL 部署时从 AstrBot 容器访问通常为 http://172.18.0.1:5000（docker 网桥网关）。",
+        "type": "string",
+        "default": "http://172.18.0.1:5000"
+    },
+    "tts_model_id": {
+        "description": "TTS 模型 ID",
+        "hint": "SBV2 GET /models/info 返回的模型 key。",
+        "type": "int",
+        "default": 0
+    },
+    "tts_speaker_id": {
+        "description": "TTS 说话人 ID",
+        "hint": "模型 config.json 中 spk2id 的值。",
+        "type": "int",
+        "default": 0
+    },
+    "tts_style": {
+        "description": "TTS 风格",
+        "hint": "模型 style2id 中的风格名，如 Neutral。",
+        "type": "string",
+        "default": "Neutral"
+    },
+    "tts_length": {
+        "description": "语速（length）",
+        "hint": "1 为基准，越大越慢。",
+        "type": "float",
+        "default": 1.0
     }
 }

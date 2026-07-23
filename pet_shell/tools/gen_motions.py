@@ -77,6 +77,25 @@ def keyframe_curve(param_id, points):
     return {"Target": "Parameter", "Id": param_id, "Segments": segments}
 
 
+def envelope_sine_curve(param_id, duration, amplitude, env_base=0.65, env_amp=0.35, cycles=1):
+    """幅度包络正弦：载波为整周期慢摆，幅度按 env_base±env_amp 周期起伏。
+
+    幅度包络 = env_base + env_amp*sin(2πt/T)，与载波同相位：
+    中幅起步 → 扩大 → 回中幅 → 收窄 → 回中幅，循环点处平滑连续。
+    cycles: 每个循环内载波次数。
+    """
+    n = int(duration * FPS)
+    segments = []
+    for i in range(n + 1):
+        t = i / FPS
+        env = env_base + env_amp * math.sin(2 * math.pi * t / duration)
+        v = amplitude * env * math.sin(2 * math.pi * cycles * t / duration)
+        segments += [round(t, 4), round(v, 4)]
+        if i < n:
+            segments.append(0)
+    return {"Target": "Parameter", "Id": param_id, "Segments": segments}
+
+
 def make_motion(duration, curves, loop=False):
     point_count = sum((len(c["Segments"]) + 1) // 3 + 1 for c in curves)
     return {
@@ -118,14 +137,28 @@ def main():
     }
 
     # idle_sway：原 idle 曲线 + 低频摆动（待机增强）
+    # 附带 Param149(提币手部形态) 归零曲线：确保 coin_sway 结束/被打断后手型复位
     idle_path = os.path.join(motions_dir, "idle.motion3.json")
     idle_curves = []
     if os.path.exists(idle_path):
         idle_curves = json.load(open(idle_path, encoding="utf-8")).get("Curves", [])
     generated["idle_sway"] = make_motion(6.0, idle_curves + [
+        keyframe_curve("Param149", [(0, 0), (6.0, 0)]),
         sine_curve("ParamAngleZ", 6.0, 1.8, 1),
         sine_curve("ParamBodyAngleZ", 6.0, 1.2, 1, phase=math.pi / 2),
         sine_curve("ParamAngleX", 6.0, 1.0, 2),
+    ], loop=True)
+
+    # coin_sway：复合长待机动作（8s 循环）
+    # - Param149(提币手部形态)：1s 淡入后全程保持
+    # - 头部/上身：整周期慢摆，幅度包络 中→大→中→小→中
+    # - ParamAngleX 微幅点头保持灵动感；呼吸交给框架自动系统，不做曲线
+    generated["coin_sway"] = make_motion(4.8, idle_curves + [
+        keyframe_curve("Param149", [(0, 0), (1.0, 1.0), (4.8, 1.0)]),
+        envelope_sine_curve("ParamAngleZ", 4.8, 12.0),
+        envelope_sine_curve("ParamBodyAngleZ", 4.8, 11.0),
+        envelope_sine_curve("ParamBodyAngleX", 4.8, 5.5, cycles=2),  # 身体轻微摇感
+        sine_curve("ParamAngleX", 4.8, 1.0, 2),
     ], loop=True)
 
     for name, motion in generated.items():

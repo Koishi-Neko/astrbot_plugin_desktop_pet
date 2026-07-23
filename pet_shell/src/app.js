@@ -156,6 +156,100 @@ avatar.addEventListener("error", () => {
   }
 });
 
+// ---------- 语音播放与口型 ----------
+
+let voiceEnabled = localStorage.getItem("pet_voice") !== "0";
+let audioCtx = null;
+let analyser = null;
+const audioQueue = [];
+let audioPlaying = false;
+let lipSyncRaf = null;
+
+function ensureAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+function b64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+
+function enqueueAudio(b64) {
+  try {
+    const ctx = ensureAudioCtx();
+    ctx.decodeAudioData(
+      b64ToArrayBuffer(b64),
+      (buf) => {
+        audioQueue.push(buf);
+        if (!audioPlaying) playNextAudio();
+      },
+      (e) => console.warn("音频解码失败:", e)
+    );
+  } catch (e) {
+    console.warn("音频入队失败:", e);
+  }
+}
+
+function playNextAudio() {
+  const buf = audioQueue.shift();
+  if (!buf) {
+    audioPlaying = false;
+    stopLipSync();
+    return;
+  }
+  audioPlaying = true;
+  const ctx = ensureAudioCtx();
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(analyser);
+  startLipSync();
+  src.onended = () => playNextAudio();
+  src.start();
+}
+
+function startLipSync() {
+  if (lipSyncRaf || !analyser) return;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const tick = () => {
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / data.length);
+    const mouth = Math.min(1, rms * 3.5); // 音量 → 张嘴幅度
+    if (live2dModel) {
+      try {
+        live2dModel.internalModel.coreModel.setParameterValueById("ParamMouthOpenY", mouth);
+      } catch (e) { /* 忽略 */ }
+    }
+    lipSyncRaf = requestAnimationFrame(tick);
+  };
+  lipSyncRaf = requestAnimationFrame(tick);
+}
+
+function stopLipSync() {
+  if (lipSyncRaf) {
+    cancelAnimationFrame(lipSyncRaf);
+    lipSyncRaf = null;
+  }
+  if (live2dModel) {
+    try {
+      live2dModel.internalModel.coreModel.setParameterValueById("ParamMouthOpenY", 0);
+    } catch (e) { /* 忽略 */ }
+  }
+}
+
 // ---------- 打字机 ----------
 
 const typeQueue = [];
@@ -229,6 +323,7 @@ async function sendChat(text) {
     return;
   }
   sending = true;
+  lastChatAt = Date.now();
   chatInput.disabled = true;
   showBubble();
   queueType("…");
@@ -252,6 +347,8 @@ async function sendChat(text) {
       queueType(data.text);
     } else if (data.type === "error") {
       console.warn("pet backend error:", data.message);
+    } else if (data.type === "audio") {
+      if (voiceEnabled) enqueueAudio(data.data);
     } else if (data.type === "connect_error") {
       resolveFinished({ error: data.message });
     } else if (data.type === "stream_end") {
@@ -292,6 +389,7 @@ async function sendChat(text) {
   } finally {
     if (unlisten) unlisten();
     sending = false;
+    lastChatAt = Date.now();
     chatInput.disabled = false;
     chatInput.focus();
   }
@@ -354,6 +452,13 @@ function poke() {
     playEmotionMotion("高兴");
     return;
   }
+  // 长待机演出中：只允许表情互动，动作不被打断
+  if (longIdleActive) {
+    const x = POKE_EXPRS[Math.floor(Math.random() * POKE_EXPRS.length)];
+    console.log("[poke-idle] expr:", x);
+    flashExpression(x, 2500);
+    return;
+  }
   if (Math.random() < 0.6) {
     const m = POKE_MOTIONS[Math.floor(Math.random() * POKE_MOTIONS.length)];
     console.log("[poke]", m);
@@ -413,8 +518,14 @@ $("menu-settings").addEventListener("click", () => {
   const cfg = loadConfig();
   $("cfg-base-url").value = cfg.baseUrl;
   $("cfg-api-key").value = cfg.apiKey;
+  $("cfg-voice").checked = voiceEnabled;
   $("cfg-message").textContent = "";
   settings.classList.remove("hidden");
+});
+
+$("cfg-voice").addEventListener("change", () => {
+  voiceEnabled = $("cfg-voice").checked;
+  localStorage.setItem("pet_voice", voiceEnabled ? "1" : "0");
 });
 
 $("menu-quit").addEventListener("click", () => {
@@ -531,6 +642,37 @@ function gazeWander() {
   live2dModel.focus(Math.random() * r.width, Math.random() * r.height);
 }
 
+let coinIdleTimer = null;
+let longIdleActive = false; // 长待机演出中：暂停随机调度、戳一戳只闪表情
+let lastChatAt = Date.now(); // 最近一次对话时间，24s 无对话保底触发演出
+const LONG_IDLE_TRIGGER_MS = 24000;
+
+// 长待机演出只持续 45s，由定时器自动结束；对话/戳一戳均不打断
+function enterLongIdle() {
+  longIdleActive = true;
+  console.log("[idle] 进入长待机演出");
+  live2dModel.motion("coin_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+  clearTimeout(coinIdleTimer);
+  coinIdleTimer = setTimeout(exitLongIdle, 45000);
+}
+
+// 保底触发：24s 无对话自动进入演出（对话中与演出中不触发）
+setInterval(() => {
+  if (live2dModel && !sending && !longIdleActive && Date.now() - lastChatAt > LONG_IDLE_TRIGGER_MS) {
+    enterLongIdle();
+  }
+}, 1000);
+
+function exitLongIdle() {
+  if (!longIdleActive) return;
+  longIdleActive = false;
+  console.log("[idle] 长待机演出结束");
+  clearTimeout(coinIdleTimer);
+  if (live2dModel) {
+    live2dModel.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+  }
+}
+
 const IDLE_ACTIONS = [
   ["nod", () => live2dModel.motion("nod").catch(() => {})],
   ["tilt", () => live2dModel.motion("tilt").catch(() => {})],
@@ -548,7 +690,7 @@ function scheduleIdleAction() {
   const delay = 25000 + Math.random() * 35000; // 25~60s
   setTimeout(() => {
     try {
-      if (live2dModel && !sending) {
+      if (live2dModel && !sending && !longIdleActive) {
         const [name, act] = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)];
         act();
         console.log("[idle] 随机待机动作:", name);

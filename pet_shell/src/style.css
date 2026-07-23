@@ -219,6 +219,18 @@ body {
   outline: none;
 }
 
+#settings .settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+#settings .settings-checkbox input {
+  width: auto;
+  margin: 0;
+}
+
 .settings-buttons {
   display: flex;
   gap: 6px;
