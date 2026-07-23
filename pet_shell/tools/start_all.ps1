@@ -22,7 +22,7 @@ for ($i = 0; $i -lt 40; $i++) {
 if ($ready) { Write-Output "  AstrBot 已就绪" } else { Write-Output "  警告：等待超时，AstrBot 可能仍在启动中" }
 
 Write-Output "[3/3] 启动桌宠壳..."
-$petExe = "$repo\pet_shell\src-tauri\target\debug\pet_shell.exe"
+$petExe = "$repo\pet_shell\src-tauri\target\release\pet_shell.exe"
 if (Get-Process pet_shell -ErrorAction SilentlyContinue) {
     Write-Output "  桌宠已在运行，跳过"
 } elseif (Test-Path $petExe) {
