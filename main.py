@@ -24,12 +24,14 @@ import base64
 import json
 import os
 import re
+import tempfile
 import time
 from collections.abc import AsyncGenerator
 
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import Plain, Record
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, request
@@ -61,9 +63,19 @@ EMOTION_INSTRUCTION_TTS = (
     "除开头的情绪标签和【JP】外不要输出任何其他方括号标记。"
 )
 
+JP_DUB_INSTRUCTION = (
+    "\n\n【输出格式要求·必须严格遵守】每次回复必须同时包含两部分，缺一不可："
+    "①中文正文：你的回复内容；"
+    "②日语配音稿：以「【JP】」开头，紧接与中文正文意思对应的日语，必须是纯日语口语短句，"
+    "用于语音合成朗读，不含中文、不含任何方括号标记。"
+    "完整格式示例：「早上好呀，主人！【JP】おはよう、ご主人様！」"
+    "禁止省略【JP】部分。除【JP】外不要输出任何其他方括号标记。"
+)
+
 _EMOTION_TAG = re.compile(r"^\s*【([^】]{1,8})】\s*")
 _JP_TAG = re.compile(r"\s*【\s*JP\s*】\s*", re.IGNORECASE)
 _SENTENCES = re.compile(r"[^。！？!?；;\n]+[。！？!?；;\n]*")
+_IDENT_REMINDER = re.compile(r"User ID: [^\n,]*, Nickname: [^\n]*")
 
 ERROR_FALLBACK_TEXT = "呜……好像连不上大脑了，等下再找我聊吧。"
 
@@ -74,6 +86,12 @@ TTS_CONFIG_KEYS = (
     "tts_speaker_id",
     "tts_style",
     "tts_length",
+)
+
+PAGE_CONFIG_KEYS = (
+    "master_name",
+    "master_qq",
+    "qq_jp_dub_enabled",
 )
 
 
@@ -131,6 +149,12 @@ class DesktopPetBridge(Star):
             "桌宠控制页：读写 TTS 配置",
         )
         self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/master_config",
+            self.page_master_config,
+            ["GET", "POST"],
+            "桌宠控制页：读写主人身份配置",
+        )
+        self.context.register_web_api(
             "astrbot_plugin_desktop_pet/page/tts_test",
             self.page_tts_test,
             ["POST"],
@@ -154,6 +178,7 @@ class DesktopPetBridge(Star):
             "default_provider_available": prov is not None,
             "emotions": EMOTIONS,
             "tts_enabled": self._tts_enabled(),
+            "qq_jp_dub_enabled": self._qq_jp_dub_enabled(),
             "pet_session_id": self._pet_session_id(),
         }
 
@@ -200,14 +225,14 @@ class DesktopPetBridge(Star):
             get_astrbot_data_path(), "config", "astrbot_plugin_desktop_pet_config.json"
         )
 
-    def _persist_tts_config(self) -> None:
+    def _persist_config(self) -> None:
         path = self._config_path()
         try:
             data = {}
             if os.path.exists(path):
                 with open(path, encoding="utf-8-sig") as f:
                     data = json.load(f)
-            for k in TTS_CONFIG_KEYS:
+            for k in TTS_CONFIG_KEYS + PAGE_CONFIG_KEYS:
                 if k in self.config:
                     data[k] = self.config[k]
             with open(path, "w", encoding="utf-8") as f:
@@ -240,6 +265,9 @@ class DesktopPetBridge(Star):
             "plugin": "astrbot_plugin_desktop_pet",
             "tts_enabled": self._tts_enabled(),
             "pet_session_id": self._pet_session_id(),
+            "master_name": self._master_name(),
+            "master_qq": self._master_qq(),
+            "qq_jp_dub_enabled": self._qq_jp_dub_enabled(),
             "default_persona": default_persona,
             "sbv2": await self._sbv2_status(),
         }
@@ -277,7 +305,25 @@ class DesktopPetBridge(Star):
                 return error_response(f"invalid value for {k}", status_code=400)
             self.config[k] = v
             updated[k] = v
-        self._persist_tts_config()
+        self._persist_config()
+        return {"saved": True, "updated": updated}
+
+    async def page_master_config(self):
+        if request.method == "GET":
+            return {k: self.config.get(k, "") for k in PAGE_CONFIG_KEYS}
+        payload = await request.json(default={})
+        updated = {}
+        for k in PAGE_CONFIG_KEYS:
+            if k not in payload:
+                continue
+            v = payload[k]
+            if k == "qq_jp_dub_enabled":
+                v = bool(v)
+            else:
+                v = str(v).strip()
+            self.config[k] = v
+            updated[k] = v
+        self._persist_config()
         return {"saved": True, "updated": updated}
 
     async def page_tts_test(self):
@@ -295,19 +341,78 @@ class DesktopPetBridge(Star):
         umo = event.unified_msg_origin or ""
         sid = self._pet_session_id()
         # 桌宠会话 umo 形如 webchat:FriendMessage:webchat!{username}!{conversation_id}
-        if not (umo.startswith("webchat:") and umo.endswith(f"!{sid}")):
+        if umo.startswith("webchat:") and umo.endswith(f"!{sid}"):
+            self._rewrite_pet_identity(req)
+            tpl = EMOTION_INSTRUCTION_TTS if self._tts_enabled() else EMOTION_INSTRUCTION
+            req.system_prompt = (req.system_prompt or "") + self._master_identity_note(
+                for_pet=True
+            ) + tpl.format(emotions="、".join(EMOTIONS))
+            if self._tts_enabled():
+                # 长人格 prompt 会稀释 system 侧格式要求，在用户消息末尾再提醒一次关键格式
+                reminder = (
+                    "\n（格式提醒：本次回复必须包含【情绪】中文正文和【JP】日语配音稿三部分，"
+                    "【JP】为纯日语，缺一不可。）"
+                )
+                req.prompt = (req.prompt or "") + reminder
             return
-        tpl = EMOTION_INSTRUCTION_TTS if self._tts_enabled() else EMOTION_INSTRUCTION
-        req.system_prompt = (req.system_prompt or "") + tpl.format(
-            emotions="、".join(EMOTIONS)
-        )
-        if self._tts_enabled():
-            # 长人格 prompt 会稀释 system 侧格式要求，在用户消息末尾再提醒一次关键格式
-            reminder = (
-                "\n（格式提醒：本次回复必须包含【情绪】中文正文和【JP】日语配音稿三部分，"
+        # 以下仅处理 QQ（aiocqhttp）会话
+        if event.get_platform_name() != "aiocqhttp":
+            return
+        # 主人本人发送的消息标注身份，与桌宠用户视为同一人
+        master_qq = self._master_qq()
+        if master_qq and str(event.get_sender_id()) == master_qq:
+            req.system_prompt = (req.system_prompt or "") + self._master_identity_note(
+                for_pet=False
+            )
+        # QQ 日语配音：要求回复带【JP】日语配音稿（on_decorating_result 里合成语音）
+        if self._qq_jp_dub_enabled():
+            req.system_prompt = (req.system_prompt or "") + JP_DUB_INSTRUCTION
+            # 长人格 prompt 会稀释 system 侧格式要求，在用户消息末尾再提醒一次
+            req.prompt = (req.prompt or "") + (
+                "\n（格式提醒：本次回复必须包含中文正文和【JP】日语配音稿两部分，"
                 "【JP】为纯日语，缺一不可。）"
             )
-            req.prompt = (req.prompt or "") + reminder
+            logger.info(f"[desktop_pet] qq jp dub injected: {event.unified_msg_origin}")
+
+    @filter.on_decorating_result()
+    async def attach_jp_voice(self, event: AstrMessageEvent):
+        """QQ 日语配音：把回复拆成「中文文字 + 日语配音语音」。"""
+        if not self._qq_jp_dub_enabled():
+            return
+        if event.get_platform_name() != "aiocqhttp":
+            return
+        result = event.get_result()
+        if result is None or not result.is_llm_result():
+            return
+        new_chain = []
+        changed = False
+        for comp in result.chain:
+            if isinstance(comp, Plain) and _JP_TAG.search(comp.text or ""):
+                changed = True
+                zh, jp = self._split_jp(comp.text)
+                if not jp:
+                    new_chain.append(comp)
+                    continue
+                path = None
+                audio_b64 = await self._synthesize(jp)
+                if audio_b64:
+                    path = self._write_temp_wav(audio_b64)
+                if path:
+                    if zh:
+                        new_chain.append(Plain(zh))
+                    new_chain.append(Record(file=path, url=path))
+                    try:
+                        event.track_temporary_local_file(path)
+                    except Exception:
+                        pass
+                else:
+                    # 合成失败：降级为纯中文文字，不把【JP】日语稿泄漏到群里
+                    logger.warning("[desktop_pet] qq jp dub synth failed, text only")
+                    new_chain.append(Plain(zh or comp.text))
+                continue
+            new_chain.append(comp)
+        if changed:
+            result.chain = new_chain
 
     async def chat(self):
         raw = await request.body()
@@ -338,6 +443,81 @@ class DesktopPetBridge(Star):
 
     def _pet_session_id(self) -> str:
         return str(self.config.get("pet_session_id") or "desktop_pet").strip() or "desktop_pet"
+
+    def _master_name(self) -> str:
+        return str(self.config.get("master_name") or "").strip()
+
+    def _master_qq(self) -> str:
+        return str(self.config.get("master_qq") or "").strip()
+
+    def _qq_jp_dub_enabled(self) -> bool:
+        return bool(self.config.get("qq_jp_dub_enabled", False))
+
+    @staticmethod
+    def _write_temp_wav(audio_b64: str) -> str | None:
+        try:
+            fd, path = tempfile.mkstemp(prefix="pet_dub_", suffix=".wav")
+            with os.fdopen(fd, "wb") as f:
+                f.write(base64.b64decode(audio_b64))
+            return path
+        except Exception as e:
+            logger.warning(f"[desktop_pet] write temp wav failed: {e}")
+            return None
+
+    def _rewrite_pet_identity(self, req: ProviderRequest) -> None:
+        """把桌宠会话中 AstrBot 注入的用户标识（User ID/Nickname: desktop_pet）
+        改写为主人身份，覆盖当前请求 extra_user_content_parts 与历史 contexts。"""
+        sid = self._pet_session_id()
+        name = self._master_name() or "主人"
+        qq = self._master_qq() or "master"
+        replacement = f"User ID: {qq}, Nickname: {name}"
+
+        def fix(text):
+            if not isinstance(text, str) or sid not in text:
+                return text
+            text = _IDENT_REMINDER.sub(replacement, text)
+            return text.replace(sid, name)
+
+        for part in getattr(req, "extra_user_content_parts", None) or []:
+            t = getattr(part, "text", None)
+            if isinstance(t, str):
+                new = fix(t)
+                if new != t:
+                    part.text = new
+        contexts = getattr(req, "contexts", None)
+        if isinstance(contexts, list):
+            for msg in contexts:
+                if not isinstance(msg, dict):
+                    continue
+                c = msg.get("content")
+                if isinstance(c, str):
+                    msg["content"] = fix(c)
+                elif isinstance(c, list):
+                    for seg in c:
+                        if isinstance(seg, dict) and isinstance(seg.get("text"), str):
+                            seg["text"] = fix(seg["text"])
+
+    def _master_identity_note(self, for_pet: bool) -> str:
+        name = self._master_name()
+        qq = self._master_qq()
+        if name and qq:
+            ident = f"（{name}，QQ {qq}）"
+        elif name:
+            ident = f"（{name}）"
+        elif qq:
+            ident = f"（QQ {qq}）"
+        else:
+            ident = ""
+        if for_pet:
+            return (
+                f"\n\n【身份说明】当前通过电脑桌面桌宠与你对话的用户就是你的主人本人{ident}，"
+                "与在 QQ 群聊/私聊中和你说话的是同一个人，只是换到了桌面上。"
+                "请像对待主人一样对待他，不要把他当成陌生用户或其他人。"
+            )
+        return (
+            f"\n\n【身份说明】本条消息的发送者就是你的主人本人{ident}，"
+            "桌面上桌宠里与你对话的用户也是他，二者是同一个人。"
+        )
 
     def _build_system_prompt(self) -> str:
         persona = str(self.config.get("persona") or DEFAULT_PERSONA).strip()

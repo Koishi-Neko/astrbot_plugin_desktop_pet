@@ -19,6 +19,36 @@
       </section>
 
       <section class="card">
+        <div class="card-title">主人身份</div>
+        <div class="warn">桌宠会话与 QQ 群聊中该账号的消息会被识别为同一位主人。</div>
+        <label class="row">
+          <span class="label">主人昵称</span>
+          <input type="text" id="master-name" placeholder="留空则称呼为「主人」" />
+        </label>
+        <label class="row">
+          <span class="label">主人 QQ 号</span>
+          <input type="text" id="master-qq" placeholder="QQ 侧身份标注用，可留空" spellcheck="false" />
+        </label>
+        <div class="row buttons">
+          <button id="btn-save-master" class="btn primary">保存身份</button>
+          <span id="master-save-msg" class="msg"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">QQ 日语配音</div>
+        <div class="warn">开启后，bot 在全部 QQ 群聊/私聊的回复附带一条日语配音语音（文字仍为中文）。语音服务离线时自动降级为纯文字。</div>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="qq-jp-dub" />
+          <span>启用 QQ 会话日语配音</span>
+        </label>
+        <div class="row buttons">
+          <button id="btn-save-dub" class="btn primary">保存开关</button>
+          <span id="dub-save-msg" class="msg"></span>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-title">TTS 语音配置</div>
         <label class="row checkbox-row">
           <input type="checkbox" id="tts-enabled" />

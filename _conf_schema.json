@@ -66,5 +66,23 @@
         "hint": "桌宠经 open API 对话时使用的 webchat 会话标识。该会话的 LLM 请求会被自动追加情绪/日语配音稿输出格式要求；在 WebUI 聊天页可给此会话选择人格。",
         "type": "string",
         "default": "desktop_pet"
+    },
+    "master_name": {
+        "description": "主人昵称",
+        "hint": "你在 QQ 里的昵称（或希望 bot 称呼你的名字）。填写后桌宠会话会把当前用户识别为这位主人。留空则仅声明“当前用户是主人本人”。",
+        "type": "string",
+        "default": ""
+    },
+    "master_qq": {
+        "description": "主人 QQ 号",
+        "hint": "你的 QQ 号。填写后，QQ 群聊/私聊中该账号发送的消息会被标注为主人本人，与桌宠里的用户视为同一个人。",
+        "type": "string",
+        "default": ""
+    },
+    "qq_jp_dub_enabled": {
+        "description": "QQ 会话日语配音",
+        "hint": "开启后，bot 在全部 QQ 群聊/私聊的回复格式为「中文正文【JP】日语配音稿」，文字显示中文，同时附带一条日语配音语音。需要 SBV2 语音服务在线；模型未输出【JP】或合成失败时自动降级为纯文字。",
+        "type": "bool",
+        "default": false
     }
 }

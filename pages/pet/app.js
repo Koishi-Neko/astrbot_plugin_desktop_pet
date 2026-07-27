@@ -28,9 +28,55 @@ async function refreshStatus() {
       `TTS：${s.tts_enabled ? "已启用" : "已禁用"}\n` +
       `SBV2：${sbv2Line}\n` +
       `桌宠会话 ID：${esc(s.pet_session_id)}\n` +
+      `主人身份：${esc(s.master_name || "（未设置昵称）")}${s.master_qq ? ` (QQ ${esc(s.master_qq)})` : ""}\n` +
+      `QQ 日语配音：${s.qq_jp_dub_enabled ? "已启用" : "已禁用"}\n` +
       `默认人格：${esc(s.default_persona || "（未设置）")}`;
   } catch (e) {
     $("status-box").textContent = "状态获取失败：" + e.message;
+  }
+}
+
+// ---------- 主人身份配置区 ----------
+
+async function loadMasterConfig() {
+  const cfg = await bridge.apiGet("page/master_config");
+  $("master-name").value = cfg.master_name || "";
+  $("master-qq").value = cfg.master_qq || "";
+  $("qq-jp-dub").checked = !!cfg.qq_jp_dub_enabled;
+}
+
+async function saveJpDub() {
+  $("btn-save-dub").disabled = true;
+  $("dub-save-msg").textContent = "保存中…";
+  try {
+    await bridge.apiPost("page/master_config", {
+      qq_jp_dub_enabled: $("qq-jp-dub").checked,
+    });
+    $("dub-save-msg").textContent = "已保存，即时生效。";
+    refreshStatus();
+  } catch (e) {
+    $("dub-save-msg").textContent = "保存失败：" + e.message;
+  } finally {
+    $("btn-save-dub").disabled = false;
+    setTimeout(() => ($("dub-save-msg").textContent = ""), 4000);
+  }
+}
+
+async function saveMasterConfig() {
+  $("btn-save-master").disabled = true;
+  $("master-save-msg").textContent = "保存中…";
+  try {
+    await bridge.apiPost("page/master_config", {
+      master_name: $("master-name").value.trim(),
+      master_qq: $("master-qq").value.trim(),
+    });
+    $("master-save-msg").textContent = "已保存，即时生效。";
+    refreshStatus();
+  } catch (e) {
+    $("master-save-msg").textContent = "保存失败：" + e.message;
+  } finally {
+    $("btn-save-master").disabled = false;
+    setTimeout(() => ($("master-save-msg").textContent = ""), 4000);
   }
 }
 
@@ -137,6 +183,8 @@ async function testTts() {
 
 await bridge.ready();
 $("btn-refresh").addEventListener("click", refreshStatus);
+$("btn-save-master").addEventListener("click", saveMasterConfig);
+$("btn-save-dub").addEventListener("click", saveJpDub);
 $("btn-save").addEventListener("click", saveConfig);
 $("btn-test").addEventListener("click", testTts);
 $("tts-model").addEventListener("change", () => {
@@ -151,6 +199,6 @@ $("tts-length").addEventListener("input", () => {
 });
 
 await loadConfig();
-await Promise.all([refreshStatus(), loadModels()]);
+await Promise.all([refreshStatus(), loadModels(), loadMasterConfig()]);
 // 配置里的 style/speaker 选中值在模型列表加载后应用一次
 onModelChange();
