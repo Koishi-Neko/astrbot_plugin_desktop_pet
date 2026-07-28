@@ -60,6 +60,8 @@
           autoInteract: false, // 实验室内不追踪鼠标，避免干扰动作判断
         });
         app.stage.addChild(model);
+        window.__model = model; // 调试句柄：CDP/控制台直控参数用
+        window.__app = app; // 调试句柄：renderer.extract 提取渲染结果用
         const lw = model.width, lh = model.height;
         const scale = Math.min(500 / lw, 640 / lh) * 0.95;
         model.scale.set(scale);

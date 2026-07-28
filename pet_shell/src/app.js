@@ -378,7 +378,8 @@ async function speakJp(jpText, cfg) {
   }
 }
 
-async function sendChat(text) {
+async function sendChat(text, opts = {}) {
+  const proactive = !!opts.proactive; // 主动发言：不占用/不聚焦输入框
   if (sending || !text.trim()) return;
   const cfg = loadConfig();
   if (!cfg.apiKey) {
@@ -388,7 +389,7 @@ async function sendChat(text) {
   }
   sending = true;
   lastChatAt = Date.now();
-  chatInput.disabled = true;
+  if (!proactive) chatInput.disabled = true;
   showBubble();
   queueType("…");
 
@@ -441,8 +442,10 @@ async function sendChat(text) {
     if (unlisten) unlisten();
     sending = false;
     lastChatAt = Date.now();
-    chatInput.disabled = false;
-    chatInput.focus();
+    if (!proactive) {
+      chatInput.disabled = false;
+      chatInput.focus();
+    }
   }
 }
 
@@ -764,6 +767,104 @@ function scheduleIdleAction() {
 }
 
 scheduleIdleAction();
+
+// ---------- 主动对话（态势感知 V1） ----------
+// 30s 一轮态势检查：规则命中即以【情境】消息走 webchat 管线主动发言
+//（人格/记忆/语音与正常对话完全一致）；免打扰优先，宁可少说。
+const PROACTIVE_ENABLED = localStorage.getItem("pet_proactive") !== "0"; // 默认开，localStorage 置 "0" 关闭
+const PROACTIVE_TICK_MS = 30_000;
+const PROACTIVE_GLOBAL_CD_MS = 45 * 60_000; // 全局节流：距上次发言（含正常对话）至少 45min
+const IDLE_ACTIVE_THRESHOLD_MS = 60_000; // 空闲超 60s 视为离开
+
+let proactiveLastFiredAt = 0;
+const proactiveRuleCd = {}; // ruleId -> 上次触发时间
+let proactiveWasIdle = false;
+let proactiveIdlePeakMs = 0;
+let proactiveActiveSince = Date.now();
+
+function fmtDur(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}分钟`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h}小时${m % 60}分钟` : `${h}小时`;
+}
+
+const PROACTIVE_RULES = [
+  {
+    id: "night_owl", // 深夜催睡
+    cooldownMs: 2 * 3600_000,
+    when: (s) => {
+      const h = new Date().getHours();
+      return (h >= 23 || h < 2) && s.activeMs > 3600_000;
+    },
+    prompt: (s) =>
+      `【情境】现在已经是晚上${new Date().getHours()}点多了，主人连续使用电脑${fmtDur(s.activeMs)}没有休息。请主动对主人说一句话，提醒主人早点休息。`,
+  },
+  {
+    id: "welcome_back", // 回来问候
+    cooldownMs: 3600_000,
+    when: (s) => s.justReturnedFromMs > 30 * 60_000,
+    prompt: (s) =>
+      `【情境】主人离开了${fmtDur(s.justReturnedFromMs)}，刚刚回到电脑前。请主动对主人说一句话，欢迎主人回来。`,
+  },
+  {
+    id: "sedentary", // 久坐提醒
+    cooldownMs: 2 * 3600_000,
+    when: (s) => s.activeMs > 2 * 3600_000,
+    prompt: (s) =>
+      `【情境】主人已经连续使用电脑${fmtDur(s.activeMs)}没有休息了。请主动对主人说一句话，关心一下主人的身体。`,
+  },
+];
+
+// 由空闲时长推导：连续活动时长 / 是否刚回来（及离开时长）
+function proactiveState(ctx) {
+  const now = Date.now();
+  const idleMs = ctx.idle_seconds * 1000;
+  const isIdle = idleMs >= IDLE_ACTIVE_THRESHOLD_MS;
+  let justReturnedFromMs = 0;
+  if (isIdle) {
+    proactiveWasIdle = true;
+    proactiveIdlePeakMs = Math.max(proactiveIdlePeakMs, idleMs);
+    proactiveActiveSince = now;
+  } else {
+    if (proactiveWasIdle && proactiveIdlePeakMs > 10 * 60_000) justReturnedFromMs = proactiveIdlePeakMs;
+    proactiveWasIdle = false;
+    proactiveIdlePeakMs = 0;
+  }
+  return { activeMs: now - proactiveActiveSince, justReturnedFromMs };
+}
+
+async function proactiveTick() {
+  if (!PROACTIVE_ENABLED || sending || longIdleActive) return;
+  if (!inputBar.classList.contains("hidden")) return; // 输入框打开中，勿打扰
+  const now = Date.now();
+  if (now - proactiveLastFiredAt < PROACTIVE_GLOBAL_CD_MS) return;
+  if (now - lastChatAt < PROACTIVE_GLOBAL_CD_MS) return; // 刚正常聊过也别插话
+  const ctx = await invoke()("get_system_context", {}).catch(() => null);
+  if (!ctx || ctx.is_fullscreen) return; // 全屏应用（游戏/视频）免打扰
+  const s = proactiveState(ctx);
+  for (const rule of PROACTIVE_RULES) {
+    if (now - (proactiveRuleCd[rule.id] || 0) < rule.cooldownMs) continue;
+    if (!rule.when(s)) continue;
+    proactiveRuleCd[rule.id] = now;
+    proactiveLastFiredAt = now;
+    console.log(`[proactive] 触发规则 ${rule.id}`, s);
+    sendChat(rule.prompt(s), { proactive: true });
+    break;
+  }
+}
+
+if (PROACTIVE_ENABLED) setInterval(proactiveTick, PROACTIVE_TICK_MS);
+
+// 调试句柄：强制触发某条规则（跳过条件与冷却），CDP 测试用
+window.__proactiveFire = (ruleId) => {
+  const rule = PROACTIVE_RULES.find((r) => r.id === ruleId);
+  if (!rule) return "未知规则: " + ruleId;
+  const s = { activeMs: 3 * 3600_000, justReturnedFromMs: 40 * 60_000 };
+  proactiveLastFiredAt = Date.now();
+  sendChat(rule.prompt(s), { proactive: true });
+  return "fired: " + ruleId;
+};
 
 // 启动提示
 (async () => {

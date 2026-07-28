@@ -252,6 +252,100 @@ async fn pet_tts(url: String, api_key: String, text: String) -> Result<String, S
     }
 }
 
+// ---------- 态势感知（主动对话用） ----------
+
+#[derive(serde::Serialize)]
+struct SystemContext {
+    idle_seconds: u64,
+    foreground_title: String,
+    foreground_process: String,
+    is_fullscreen: bool,
+}
+
+#[tauri::command]
+fn get_system_context() -> Result<SystemContext, String> {
+    use windows::Win32::Foundation::{CloseHandle, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        // 用户空闲时长（秒）：任意键鼠输入都会归零
+        let mut lii = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        GetLastInputInfo(&mut lii)
+            .ok()
+            .map_err(|e| e.to_string())?;
+        let idle_seconds = GetTickCount().wrapping_sub(lii.dwTime) as u64 / 1000;
+
+        // 前台窗口标题 / 进程名 / 是否全屏
+        let hwnd = GetForegroundWindow();
+        let mut foreground_title = String::new();
+        let mut foreground_process = String::new();
+        let mut is_fullscreen = false;
+        if !hwnd.is_invalid() {
+            let mut tbuf = [0u16; 512];
+            let n = GetWindowTextW(hwnd, &mut tbuf);
+            if n > 0 {
+                foreground_title = String::from_utf16_lossy(&tbuf[..n as usize]);
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid != 0 {
+                if let Ok(hproc) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                    let mut pbuf = [0u16; 512];
+                    let mut len = pbuf.len() as u32;
+                    if QueryFullProcessImageNameW(
+                        hproc,
+                        PROCESS_NAME_WIN32,
+                        windows::core::PWSTR(pbuf.as_mut_ptr()),
+                        &mut len,
+                    )
+                    .is_ok()
+                    {
+                        let full = String::from_utf16_lossy(&pbuf[..len as usize]);
+                        foreground_process =
+                            full.rsplit('\\').next().unwrap_or(&full).to_string();
+                    }
+                    let _ = CloseHandle(hproc);
+                }
+            }
+            let mut rc = RECT::default();
+            if GetWindowRect(hwnd, &mut rc).is_ok() {
+                let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                let mut mi = MONITORINFO {
+                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                    ..Default::default()
+                };
+                if GetMonitorInfoW(mon, &mut mi).as_bool() {
+                    let m = mi.rcMonitor;
+                    is_fullscreen = rc.left <= m.left
+                        && rc.top <= m.top
+                        && rc.right >= m.right
+                        && rc.bottom >= m.bottom;
+                }
+            }
+        }
+        Ok(SystemContext {
+            idle_seconds,
+            foreground_title,
+            foreground_process,
+            is_fullscreen,
+        })
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -262,7 +356,8 @@ fn main() {
             pet_chat,
             pet_health,
             pet_open_chat,
-            pet_tts
+            pet_tts,
+            get_system_context
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
