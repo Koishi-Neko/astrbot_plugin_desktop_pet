@@ -573,6 +573,7 @@ $("menu-settings").addEventListener("click", () => {
   $("cfg-base-url").value = cfg.baseUrl;
   $("cfg-api-key").value = cfg.apiKey;
   $("cfg-voice").checked = voiceEnabled;
+  $("cfg-proactive").checked = proactiveEnabled();
   $("cfg-message").textContent = "";
   settings.classList.remove("hidden");
 });
@@ -580,6 +581,11 @@ $("menu-settings").addEventListener("click", () => {
 $("cfg-voice").addEventListener("change", () => {
   voiceEnabled = $("cfg-voice").checked;
   localStorage.setItem("pet_voice", voiceEnabled ? "1" : "0");
+});
+
+$("cfg-proactive").addEventListener("change", () => {
+  localStorage.setItem("pet_proactive", $("cfg-proactive").checked ? "1" : "0");
+  showStatusTip($("cfg-proactive").checked ? "主动对话已开启" : "主动对话已关闭", 2000);
 });
 
 $("menu-quit").addEventListener("click", () => {
@@ -768,13 +774,47 @@ function scheduleIdleAction() {
 
 scheduleIdleAction();
 
-// ---------- 主动对话（态势感知 V1） ----------
+// ---------- 主动对话（态势感知 V2） ----------
 // 30s 一轮态势检查：规则命中即以【情境】消息走 webchat 管线主动发言
 //（人格/记忆/语音与正常对话完全一致）；免打扰优先，宁可少说。
-const PROACTIVE_ENABLED = localStorage.getItem("pet_proactive") !== "0"; // 默认开，localStorage 置 "0" 关闭
+// V2：设置面板开关、规则阈值 config.local.json 配置化、触发历史。
 const PROACTIVE_TICK_MS = 30_000;
-const PROACTIVE_GLOBAL_CD_MS = 45 * 60_000; // 全局节流：距上次发言（含正常对话）至少 45min
 const IDLE_ACTIVE_THRESHOLD_MS = 60_000; // 空闲超 60s 视为离开
+
+// 默认参数；config.local.json 的 proactive 节可覆盖（localStorage 开关优先级最高）
+const PROACTIVE_DEFAULTS = {
+  enabled: true,
+  globalCooldownMin: 45, // 全局节流：距上次发言（含正常对话）至少 N 分钟
+  rules: {
+    night_owl: { enabled: true, startHour: 23, endHour: 2, activeHours: 1, cooldownHours: 2 },
+    welcome_back: { enabled: true, awayMinutes: 30, cooldownHours: 1 },
+    sedentary: { enabled: true, activeHours: 2, cooldownHours: 2 },
+  },
+};
+let proactiveParams = PROACTIVE_DEFAULTS;
+
+// loadFileConfig 之后调用：合并 config.local.json 的 proactive 覆盖
+function applyProactiveConfig() {
+  const c = fileConfig && fileConfig.proactive;
+  if (!c) return;
+  proactiveParams = {
+    globalCooldownMin: c.globalCooldownMin ?? PROACTIVE_DEFAULTS.globalCooldownMin,
+    rules: Object.fromEntries(
+      Object.entries(PROACTIVE_DEFAULTS.rules).map(([k, v]) => [
+        k,
+        { ...v, ...((c.rules && c.rules[k]) || {}) },
+      ])
+    ),
+  };
+}
+
+// 开关：localStorage > config.local.json > 默认开
+function proactiveEnabled() {
+  const v = localStorage.getItem("pet_proactive");
+  if (v !== null) return v !== "0";
+  const c = fileConfig && fileConfig.proactive;
+  return !(c && c.enabled === false);
+}
 
 let proactiveLastFiredAt = 0;
 const proactiveRuleCd = {}; // ruleId -> 上次触发时间
@@ -789,28 +829,42 @@ function fmtDur(ms) {
   return m % 60 ? `${h}小时${m % 60}分钟` : `${h}小时`;
 }
 
+// 触发历史：最近 20 条存 localStorage，window.__proactiveLog() 查看
+function proactiveLogFire(ruleId, promptText) {
+  try {
+    const logs = JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
+    logs.push({
+      t: new Date().toLocaleString("zh-CN", { hour12: false }),
+      rule: ruleId,
+      prompt: promptText.slice(0, 50),
+    });
+    localStorage.setItem("pet_proactive_log", JSON.stringify(logs.slice(-20)));
+  } catch {}
+}
+
 const PROACTIVE_RULES = [
   {
     id: "night_owl", // 深夜催睡
-    cooldownMs: 2 * 3600_000,
-    when: (s) => {
+    when: (s, p) => {
       const h = new Date().getHours();
-      return (h >= 23 || h < 2) && s.activeMs > 3600_000;
+      const inWindow =
+        p.startHour <= p.endHour
+          ? h >= p.startHour && h < p.endHour
+          : h >= p.startHour || h < p.endHour; // 跨零点时段
+      return inWindow && s.activeMs > p.activeHours * 3600_000;
     },
     prompt: (s) =>
       `【情境】现在已经是晚上${new Date().getHours()}点多了，主人连续使用电脑${fmtDur(s.activeMs)}没有休息。请主动对主人说一句话，提醒主人早点休息。`,
   },
   {
     id: "welcome_back", // 回来问候
-    cooldownMs: 3600_000,
-    when: (s) => s.justReturnedFromMs > 30 * 60_000,
+    when: (s, p) => s.justReturnedFromMs > p.awayMinutes * 60_000,
     prompt: (s) =>
       `【情境】主人离开了${fmtDur(s.justReturnedFromMs)}，刚刚回到电脑前。请主动对主人说一句话，欢迎主人回来。`,
   },
   {
     id: "sedentary", // 久坐提醒
-    cooldownMs: 2 * 3600_000,
-    when: (s) => s.activeMs > 2 * 3600_000,
+    when: (s, p) => s.activeMs > p.activeHours * 3600_000,
     prompt: (s) =>
       `【情境】主人已经连续使用电脑${fmtDur(s.activeMs)}没有休息了。请主动对主人说一句话，关心一下主人的身体。`,
   },
@@ -835,26 +889,31 @@ function proactiveState(ctx) {
 }
 
 async function proactiveTick() {
-  if (!PROACTIVE_ENABLED || sending || longIdleActive) return;
+  if (!proactiveEnabled() || sending || longIdleActive) return;
   if (!inputBar.classList.contains("hidden")) return; // 输入框打开中，勿打扰
   const now = Date.now();
-  if (now - proactiveLastFiredAt < PROACTIVE_GLOBAL_CD_MS) return;
-  if (now - lastChatAt < PROACTIVE_GLOBAL_CD_MS) return; // 刚正常聊过也别插话
+  const globalCdMs = proactiveParams.globalCooldownMin * 60_000;
+  if (now - proactiveLastFiredAt < globalCdMs) return;
+  if (now - lastChatAt < globalCdMs) return; // 刚正常聊过也别插话
   const ctx = await invoke()("get_system_context", {}).catch(() => null);
   if (!ctx || ctx.is_fullscreen) return; // 全屏应用（游戏/视频）免打扰
   const s = proactiveState(ctx);
   for (const rule of PROACTIVE_RULES) {
-    if (now - (proactiveRuleCd[rule.id] || 0) < rule.cooldownMs) continue;
-    if (!rule.when(s)) continue;
+    const p = proactiveParams.rules[rule.id];
+    if (!p || !p.enabled) continue;
+    if (now - (proactiveRuleCd[rule.id] || 0) < p.cooldownHours * 3600_000) continue;
+    if (!rule.when(s, p)) continue;
     proactiveRuleCd[rule.id] = now;
     proactiveLastFiredAt = now;
+    const text = rule.prompt(s);
     console.log(`[proactive] 触发规则 ${rule.id}`, s);
-    sendChat(rule.prompt(s), { proactive: true });
+    proactiveLogFire(rule.id, text);
+    sendChat(text, { proactive: true });
     break;
   }
 }
 
-if (PROACTIVE_ENABLED) setInterval(proactiveTick, PROACTIVE_TICK_MS);
+setInterval(proactiveTick, PROACTIVE_TICK_MS);
 
 // 调试句柄：强制触发某条规则（跳过条件与冷却），CDP 测试用
 window.__proactiveFire = (ruleId) => {
@@ -862,13 +921,18 @@ window.__proactiveFire = (ruleId) => {
   if (!rule) return "未知规则: " + ruleId;
   const s = { activeMs: 3 * 3600_000, justReturnedFromMs: 40 * 60_000 };
   proactiveLastFiredAt = Date.now();
-  sendChat(rule.prompt(s), { proactive: true });
+  const text = rule.prompt(s);
+  proactiveLogFire(ruleId + "(debug)", text);
+  sendChat(text, { proactive: true });
   return "fired: " + ruleId;
 };
+window.__proactiveLog = () => JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
+window.__proactiveParams = () => proactiveParams;
 
 // 启动提示
 (async () => {
   await loadFileConfig();
+  applyProactiveConfig(); // 主动对话参数覆盖（须在 loadFileConfig 之后）
   initLive2D(); // 异步加载 Live2D，失败自动回退静态立绘
   if (!loadConfig().apiKey) {
     showBubble();
