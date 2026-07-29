@@ -38,8 +38,10 @@
 插件自带 WebUI 控制页，是配置的**主入口**。进入方式：WebUI → 插件 → 找到「astrbot_plugin_desktop_pet」→ 点详情/控制页。控制页包含：
 
 - **状态区**：SBV2 连通性/延迟/显存、桌宠会话 ID、当前主人身份、QQ 配音开关、默认人格。
+- **主动对话 / 桌面感知动态**卡片：桌宠壳 60s 心跳上报（在线/过期、主动对话与桌面感知开关、观察间隔、生效中的视觉模型与禁止抓取名单）+ 最近 20 条触发事件（含【略过】与拦截记录）。
 - **主人身份**卡片：主人昵称、主人 QQ 号（桌宠会话与 QQ 中该账号消息会被识别为同一位主人）。
 - **QQ 日语配音**卡片：开关（开启后 bot 在全部 QQ 群聊/私聊回复附带一条日语配音语音，文字仍为中文；SBV2 离线自动降级为纯文字）。
+- **桌面感知配置**卡片：视觉模型（识图用 provider，需 modalities 含 image）、禁止抓取进程名单（逗号分隔；名单内进程在前台时不截图）。壳端远程拉取，约 2 分钟内生效。
 - **TTS 语音配置**卡片：启用开关、SBV2 服务地址、模型/说话人/风格（下拉实时拉 SBV2 `/models/info`）、语速滑块。
 - **试听**区：用当前参数即时合成播放，不保存配置。
 
@@ -62,7 +64,9 @@
 | GET  | `/api/v1/plugins/extensions/desktop_pet/pet/health` | 探活，返回插件、默认模型可用性、情绪列表、TTS/QQ 配音开关、会话 ID |
 | POST | `/api/v1/plugins/extensions/desktop_pet/pet/tts` | 日语 TTS 合成：`{"text":"..."}` → `{"audio":"<base64 wav>","format":"wav"}`，壳端按句调用 |
 | GET  | `/api/v1/plugins/extensions/desktop_pet/pet/personas` | 列出 AstrBot 人格（供桌宠选用参考） |
-| *    | `/api/v1/plugins/extensions/astrbot_plugin_desktop_pet/page/*` | WebUI 控制页后端（status / sbv2_models / tts_config / master_config / tts_test） |
+| GET  | `/api/v1/plugins/extensions/desktop_pet/pet/scene_config` | 桌面感知配置下发：`{"provider":"...","blocklist":[...]}`，壳端 120s 缓存拉取 |
+| POST | `/api/v1/plugins/extensions/desktop_pet/pet/status_report` | 壳端状态上报（60s 心跳 + 触发后防抖），插件内存暂存供控制页监控 |
+| *    | `/api/v1/plugins/extensions/astrbot_plugin_desktop_pet/page/*` | WebUI 控制页后端（status / sbv2_models / tts_config / master_config / scene_config / tts_test） |
 
 > 控制页 API 路由前缀必须是**插件全名**（`astrbot_plugin_desktop_pet/page/...`），bridge 按插件名转发；用 `desktop_pet/page/...` 会报「未找到该路由」。
 
@@ -91,8 +95,7 @@ npm run build      # 产出独立 exe（src-tauri/target/release/）
       "welcome_back":  { "enabled": true, "awayMinutes": 30,                "cooldownHours": 1 },
       "sedentary":     { "enabled": true, "activeHours": 2,                 "cooldownHours": 2 }
     },
-    "scene": { "enabled": false, "intervalMin": 30, "maxIdleMin": 10, "provider": "scnet/Kimi-K2.6",
-               "blocklist": ["weixin.exe", "wechat.exe", "qq.exe", "wemeetapp.exe", "winword.exe", "excel.exe", "powerpnt.exe"] }
+    "scene": { "enabled": false, "intervalMin": 30, "maxIdleMin": 10 }
   }
 }
 ```
@@ -102,7 +105,7 @@ npm run build      # 产出独立 exe（src-tauri/target/release/）
 设置面板内还有：
 - **语音（日语配音）**：开关桌宠回复的日语语音播放（仅控制壳端播放，服务端仍按配置合成）。
 - **主动对话（适时插话）**：开关主动对话。开启后壳端每 30s 检查态势（深夜连续活动催睡、离开后回来问候、久坐提醒），满足条件时以情境提示触发一次主动发言；全屏应用前台 / 输入框打开 / 对话中自动免打扰。
-- **桌面感知（看屏幕主动搭话）**：默认关。开启后按「观察间隔」抓取**前台窗口**画面（Windows Graphics Capture 进程级抓取，只含目标窗口内容，遮挡窗口也能抓），经 open API `/api/v1/file` 上传后随情境消息发给「视觉模型」识图：看到值得评论的内容（游戏进展、文档、有趣页面）就自然搭话，没什么值得说的模型回【略过】则静默。**截图会发送给云端 LLM 提供商**；观察间隔与视觉模型均可在设置面板调整（localStorage 即时生效）。**禁止抓取名单**：`proactive.scene.blocklist`（或设置面板文本框，逗号分隔进程名）内的进程位于前台时直接跳过、不截图——默认含微信（`weixin`/`wechat` 等）、QQ/TIM、企业微信、钉钉、腾讯会议、Word/Excel/PowerPoint。要求：API Key 需带 `file` scope；视觉模型需 modalities 含 image（实测 `scnet/Kimi-K2.6` 可用，`deepseek/deepseek-v4-pro` 接口拒收 `image_url` 勿用）。已知限制：独占全屏游戏绕过 DWM 抓不到（无边框窗口化即可）、窗口最小化抓不到、DRM 内容黑帧（自动跳过）。
+- **桌面感知（看屏幕主动搭话）**：默认关。开启后按「观察间隔」抓取**前台窗口**画面（Windows Graphics Capture 进程级抓取，只含目标窗口内容，遮挡窗口也能抓），经 open API `/api/v1/file` 上传后随情境消息发给视觉模型识图：看到值得评论的内容（游戏进展、文档、有趣页面）就自然搭话，没什么值得说的模型回【略过】则静默。**截图会发送给云端 LLM 提供商**。设置面板只有开关与观察间隔（灵活切）；**视觉模型与禁止抓取名单在插件控制页「桌面感知配置」卡配置**（一次性设置，壳端 120s 缓存远程拉取；插件不可达时回退 `config.local.json` 的 `scene.provider/blocklist` 或内置默认）。名单内进程在前台时直接跳过、不截图——默认含微信（`weixin`/`wechat` 等）、QQ/TIM、企业微信、钉钉、腾讯会议、Word/Excel/PowerPoint。要求：API Key 需带 `file` scope；视觉模型需 modalities 含 image（实测 `scnet/Kimi-K2.6` 可用，`deepseek/deepseek-v4-pro` 接口拒收 `image_url` 勿用）。已知限制：独占全屏游戏绕过 DWM 抓不到（无边框窗口化即可）、窗口最小化抓不到、DRM 内容黑帧（自动跳过）。
 
 ## 六、操作
 
