@@ -777,6 +777,8 @@ scheduleIdleAction();
 // ---------- 主动对话（态势感知 V2） ----------
 // 30s 一轮态势检查：规则命中即以【情境】消息走 webchat 管线主动发言
 //（人格/记忆/语音与正常对话完全一致）；免打扰优先，宁可少说。
+// 长待机演出（coin_sway）不构成免打扰：发言时演出继续，
+// 情绪走表情通道叠加，与动作通道互不干扰。
 // V2：设置面板开关、规则阈值 config.local.json 配置化、触发历史。
 const PROACTIVE_TICK_MS = 30_000;
 const IDLE_ACTIVE_THRESHOLD_MS = 60_000; // 空闲超 60s 视为离开
@@ -889,7 +891,7 @@ function proactiveState(ctx) {
 }
 
 async function proactiveTick() {
-  if (!proactiveEnabled() || sending || longIdleActive) return;
+  if (!proactiveEnabled() || sending) return;
   if (!inputBar.classList.contains("hidden")) return; // 输入框打开中，勿打扰
   const now = Date.now();
   const globalCdMs = proactiveParams.globalCooldownMin * 60_000;
@@ -928,6 +930,7 @@ window.__proactiveFire = (ruleId) => {
 };
 window.__proactiveLog = () => JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
 window.__proactiveParams = () => proactiveParams;
+window.__proactiveTick = proactiveTick;
 
 // 启动提示
 (async () => {
