@@ -218,6 +218,81 @@ async fn pet_upload_file(
     }
 }
 
+/// 能力自检：用当前 key 探测 plugin/chat/file 三项 scope 与默认模型可用性。
+/// 探测手法：发"故意错误"的请求看状态码——401/403 = 缺 scope，其他（400/422/200）= scope 在。
+/// 不产生 LLM 消耗、不留附件。
+#[derive(serde::Serialize)]
+struct Capabilities {
+    plugin: bool,
+    chat: bool,
+    file: bool,
+    provider: bool,
+}
+
+#[tauri::command]
+async fn pet_capabilities(base_url: String, api_key: String) -> Result<Capabilities, String> {
+    let base = base_url.trim_end_matches('/');
+    let root = base.strip_suffix("/plugins/extensions").unwrap_or(base);
+    let client = reqwest::Client::new();
+
+    let (plugin, provider) = match client
+        .get(format!("{base}/desktop_pet/pet/health"))
+        .header("X-API-Key", &api_key)
+        .send()
+        .await
+    {
+        Ok(r) => {
+            if r.status().is_success() {
+                let t = r.text().await.unwrap_or_default();
+                let prov = serde_json::from_str::<serde_json::Value>(&t)
+                    .ok()
+                    .and_then(|v| v.get("default_provider_available").and_then(|x| x.as_bool()))
+                    .unwrap_or(false);
+                (true, prov)
+            } else {
+                (false, false)
+            }
+        }
+        Err(e) => return Err(format!("连接失败: {e}")),
+    };
+
+    let chat = match client
+        .post(format!("{root}/chat"))
+        .header("X-API-Key", &api_key)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let s = r.status().as_u16();
+            s != 401 && s != 403
+        }
+        Err(_) => false,
+    };
+
+    let file = match client
+        .post(format!("{root}/file"))
+        .header("X-API-Key", &api_key)
+        .multipart(reqwest::multipart::Form::new())
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let s = r.status().as_u16();
+            s != 401 && s != 403
+        }
+        Err(_) => false,
+    };
+
+    Ok(Capabilities {
+        plugin,
+        chat,
+        file,
+        provider,
+    })
+}
+
 /// 通用 GET（带 API Key），返回响应文本。壳端拉取插件配置等场景用。
 #[tauri::command]
 async fn pet_get(url: String, api_key: String) -> Result<String, String> {
@@ -364,6 +439,7 @@ fn main() {
             quit_app,
             resize_window,
             pet_health,
+            pet_capabilities,
             pet_open_chat,
             pet_tts,
             pet_upload_file,

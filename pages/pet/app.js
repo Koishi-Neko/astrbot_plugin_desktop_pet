@@ -32,21 +32,36 @@ async function refreshStatus() {
       `QQ 日语配音：${s.qq_jp_dub_enabled ? "已启用" : "已禁用"}\n` +
       `默认人格：${esc(s.default_persona || "（未设置）")}`;
 
-    // 主动对话 / 桌面感知动态（壳端上报，插件内存暂存）
+    // 主动对话 / 桌面感知动态：配置以插件侧为准，运行态来自壳端心跳上报
     const r = s.shell_report;
-    if (!r) {
-      $("pet-report").innerHTML = `<span class="bad">● 暂无桌宠上报</span>（桌宠未运行或版本过旧；上报周期 60s）`;
-    } else {
-      const age = s.shell_report_age_s;
-      const stale = age == null || age > 180;
-      const scene = s.scene || {};
-      $("pet-report").innerHTML =
-        `上报：${stale ? '<span class="bad">● 已过期' : '<span class="ok">● 在线'}（${age ?? "?"} 秒前）</span>\n` +
-        `主动对话：${r.proactive_enabled ? "已启用" : "已禁用"}\n` +
-        `桌面感知：${r.scene_enabled ? `已启用 · 每 ${r.scene_interval_min ?? "?"} 分钟` : "已禁用"}\n` +
-        `视觉模型：${esc(scene.provider || "（留空）跟随会话默认模型")}\n` +
-        `禁止抓取：${esc(((scene.blocklist || []).join(", ")) || "（空）")}`;
+    const scene = s.scene || {};
+    const reportLine = !r
+      ? `<span class="bad">● 暂无桌宠上报</span>（桌宠未运行或版本过旧；上报周期 60s）`
+      : (() => {
+          const age = s.shell_report_age_s;
+          const stale = age == null || age > 180;
+          return stale
+            ? `<span class="bad">● 桌宠上报已过期（${age} 秒前）</span>`
+            : `<span class="ok">● 桌宠在线（${age} 秒前上报）</span>`;
+        })();
+    let lastSceneLine = "";
+    if (r && r.last_scene) {
+      const ls = r.last_scene;
+      const outcomeMap = {
+        spoke: "已发言",
+        skip: "略过（无可评论内容）",
+        blocked: `拦截（${esc(ls.detail || "")}）`,
+        error: `失败（${esc(ls.detail || "")}）`,
+      };
+      lastSceneLine = `\n最近一次感知：${esc(ls.t || "")} · ${outcomeMap[ls.outcome] || esc(ls.outcome || "")}`;
     }
+    $("pet-report").innerHTML =
+      `上报：${reportLine}\n` +
+      `主动对话：${scene.proactive_enabled ? "已启用" : "已禁用"}\n` +
+      `桌面感知：${scene.scene_enabled ? `已启用 · 每 ${scene.scene_interval_min ?? "?"} 分钟` : "已禁用"}\n` +
+      `视觉模型：${esc(scene.provider || "（留空）跟随会话默认模型")}\n` +
+      `禁止抓取：${esc(((scene.blocklist || []).join(", ")) || "（空）")}` +
+      lastSceneLine;
   } catch (e) {
     $("status-box").textContent = "状态获取失败：" + e.message;
   }
@@ -173,12 +188,26 @@ async function saveConfig() {
   }
 }
 
-// ---------- 桌面感知配置区 ----------
+// ---------- 主动对话 / 桌面感知配置区 ----------
+
+let sceneProviders = []; // GET 时附带的已配置 provider 列表（下拉建议+校验）
 
 async function loadSceneConfig() {
   const cfg = await bridge.apiGet("page/scene_config");
+  $("proactive-enabled").checked = !!cfg.proactive_enabled;
+  $("scene-enabled").checked = !!cfg.scene_enabled;
+  $("scene-interval").value = String(cfg.scene_interval_min || 30);
   $("scene-provider").value = cfg.scene_provider || "";
   $("scene-blocklist").value = cfg.scene_blocklist || "";
+  sceneProviders = cfg.providers || [];
+  const dl = $("provider-list");
+  dl.innerHTML = "";
+  for (const p of sceneProviders) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.label = `${p.model}${p.supports_image ? "（支持图片）" : "（不支持图片）"}`;
+    dl.appendChild(opt);
+  }
 }
 
 async function saveSceneConfig() {
@@ -186,6 +215,9 @@ async function saveSceneConfig() {
   $("scene-save-msg").textContent = "保存中…";
   try {
     await bridge.apiPost("page/scene_config", {
+      proactive_enabled: $("proactive-enabled").checked,
+      scene_enabled: $("scene-enabled").checked,
+      scene_interval_min: Number($("scene-interval").value),
       scene_provider: $("scene-provider").value.trim(),
       scene_blocklist: $("scene-blocklist").value.trim(),
     });

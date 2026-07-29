@@ -3,37 +3,43 @@
         "description": "启用语音合成（TTS）",
         "hint": "开启后模型回复会附带日语配音稿，插件调用 Style-Bert-VITS2 合成语音并随 SSE 流返回音频帧。",
         "type": "bool",
-        "default": false
+        "default": false,
+        "invisible": true
     },
     "tts_base_url": {
         "description": "Style-Bert-VITS2 服务地址",
         "hint": "SBV2 server_fastapi 的地址。WSL 部署时从 AstrBot 容器访问通常为 http://172.18.0.1:5000（docker 网桥网关）。",
         "type": "string",
-        "default": "http://172.18.0.1:5000"
+        "default": "http://172.18.0.1:5000",
+        "invisible": true
     },
     "tts_model_id": {
         "description": "TTS 模型 ID",
         "hint": "SBV2 GET /models/info 返回的模型 key。",
         "type": "int",
-        "default": 0
+        "default": 0,
+        "invisible": true
     },
     "tts_speaker_id": {
         "description": "TTS 说话人 ID",
         "hint": "模型 config.json 中 spk2id 的值。",
         "type": "int",
-        "default": 0
+        "default": 0,
+        "invisible": true
     },
     "tts_style": {
         "description": "TTS 风格",
         "hint": "模型 style2id 中的风格名，如 Neutral。",
         "type": "string",
-        "default": "Neutral"
+        "default": "Neutral",
+        "invisible": true
     },
     "tts_length": {
         "description": "语速（length）",
         "hint": "1 为基准，越大越慢。",
         "type": "float",
-        "default": 1.0
+        "default": 1.0,
+        "invisible": true
     },
     "pet_session_id": {
         "description": "桌宠 webchat 会话 ID",
@@ -45,30 +51,56 @@
         "description": "主人昵称",
         "hint": "你在 QQ 里的昵称（或希望 bot 称呼你的名字）。填写后桌宠会话会把当前用户识别为这位主人。留空则仅声明“当前用户是主人本人”。",
         "type": "string",
-        "default": ""
+        "default": "",
+        "invisible": true
     },
     "master_qq": {
         "description": "主人 QQ 号",
         "hint": "你的 QQ 号。填写后，QQ 群聊/私聊中该账号发送的消息会被标注为主人本人，与桌宠里的用户视为同一个人。",
         "type": "string",
-        "default": ""
+        "default": "",
+        "invisible": true
     },
     "qq_jp_dub_enabled": {
         "description": "QQ 会话日语配音",
         "hint": "开启后，bot 在全部 QQ 群聊/私聊的回复格式为「中文正文【JP】日语配音稿」，文字显示中文，同时附带一条日语配音语音。需要 SBV2 语音服务在线；模型未输出【JP】或合成失败时自动降级为纯文字。",
         "type": "bool",
-        "default": false
+        "default": false,
+        "invisible": true
     },
     "scene_provider": {
         "description": "桌面感知视觉模型",
         "hint": "桌宠抓取前台窗口截图后，使用该 provider 进行识图。留空则跟随会话默认模型——默认模型若不支持图片输入，识图会失败并自动跳过本轮。",
         "type": "string",
-        "default": ""
+        "default": "",
+        "invisible": true
     },
     "scene_blocklist": {
         "description": "桌面感知禁止抓取进程名单",
         "hint": "逗号/空白分隔的小写进程名。名单内进程位于前台时不截图（抓取前拦截）。默认含微信/QQ/TIM/企业微信/钉钉/腾讯会议/Office 三件套。",
         "type": "string",
-        "default": "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, winword.exe, excel.exe, powerpnt.exe"
+        "default": "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, winword.exe, excel.exe, powerpnt.exe",
+        "invisible": true
+    },
+    "proactive_enabled": {
+        "description": "主动对话总开关",
+        "hint": "开启后桌宠会按规则主动插话（深夜催睡/回来问候/久坐提醒）。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+    },
+    "scene_enabled": {
+        "description": "桌面感知开关",
+        "hint": "开启后桌宠按观察间隔抓取前台窗口截图发给视觉模型识图搭话。截图会发送给 LLM 提供商。",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+    },
+    "scene_interval_min": {
+        "description": "桌面感知观察间隔（分钟）",
+        "hint": "每隔多少分钟看一次屏幕。间隔即成本阀门。",
+        "type": "int",
+        "default": 30,
+        "invisible": true
     }
 }

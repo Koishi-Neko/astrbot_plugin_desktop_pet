@@ -83,12 +83,18 @@ PAGE_CONFIG_KEYS = (
     "qq_jp_dub_enabled",
 )
 
-# 桌面感知（壳端远程拉取，控制页编辑；一次性配置，不放壳端设置面板）
+# 桌面感知/主动对话（壳端远程拉取，控制页编辑；服务侧配置统一收口此处下发）
 SCENE_CONFIG_KEYS = (
     "scene_provider",
     "scene_blocklist",
+    "proactive_enabled",
+    "scene_enabled",
+    "scene_interval_min",
 )
 
+DEFAULT_PROACTIVE_ENABLED = True
+DEFAULT_SCENE_ENABLED = False
+DEFAULT_SCENE_INTERVAL_MIN = 30
 DEFAULT_SCENE_BLOCKLIST = (
     "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, "
     "qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, "
@@ -231,16 +237,35 @@ class DesktopPetBridge(Star):
     def _scene_blocklist_str(self) -> str:
         return str(self.config.get("scene_blocklist") or DEFAULT_SCENE_BLOCKLIST).strip()
 
+    def _proactive_enabled(self) -> bool:
+        return bool(self.config.get("proactive_enabled", DEFAULT_PROACTIVE_ENABLED))
+
+    def _scene_enabled(self) -> bool:
+        return bool(self.config.get("scene_enabled", DEFAULT_SCENE_ENABLED))
+
+    def _scene_interval_min(self) -> int:
+        try:
+            v = int(self.config.get("scene_interval_min") or DEFAULT_SCENE_INTERVAL_MIN)
+            return max(1, v)
+        except (TypeError, ValueError):
+            return DEFAULT_SCENE_INTERVAL_MIN
+
     @staticmethod
     def _parse_blocklist(raw: str) -> list[str]:
         return [s.strip().lower() for s in re.split(r"[,，\s]+", raw or "") if s.strip()]
 
-    async def pet_scene_config(self):
-        """壳端拉取桌面感知配置：{"provider": str, "blocklist": [..]}"""
+    def _scene_payload(self) -> dict:
         return {
             "provider": self._scene_provider(),
             "blocklist": self._parse_blocklist(self._scene_blocklist_str()),
+            "proactive_enabled": self._proactive_enabled(),
+            "scene_enabled": self._scene_enabled(),
+            "scene_interval_min": self._scene_interval_min(),
         }
+
+    async def pet_scene_config(self):
+        """壳端拉取主动对话/桌面感知配置（服务侧统一下发）。"""
+        return self._scene_payload()
 
     async def pet_status_report(self):
         """壳端状态上报（主动对话/桌面感知监控），仅存内存，重启即清。"""
@@ -250,12 +275,14 @@ class DesktopPetBridge(Star):
         except (ValueError, UnicodeDecodeError):
             body = {}
         events = body.get("events")
+        last_scene = body.get("last_scene")
         self._shell_report = {
             "at": time.time(),
             "proactive_enabled": bool(body.get("proactive_enabled")),
             "scene_enabled": bool(body.get("scene_enabled")),
             "scene_interval_min": body.get("scene_interval_min"),
             "events": events[-20:] if isinstance(events, list) else [],
+            "last_scene": last_scene if isinstance(last_scene, dict) else None,
         }
         return {"ok": True}
 
@@ -316,10 +343,7 @@ class DesktopPetBridge(Star):
             "qq_jp_dub_enabled": self._qq_jp_dub_enabled(),
             "default_persona": default_persona,
             "sbv2": await self._sbv2_status(),
-            "scene": {
-                "provider": self._scene_provider(),
-                "blocklist": self._parse_blocklist(self._scene_blocklist_str()),
-            },
+            "scene": self._scene_payload(),
             "shell_report": self._shell_report,
             "shell_report_age_s": (
                 round(time.time() - self._shell_report["at"]) if self._shell_report else None
@@ -388,22 +412,70 @@ class DesktopPetBridge(Star):
             return error_response("合成失败，请检查 SBV2 服务与参数", status_code=502)
         return {"audio": audio, "format": "wav"}
 
+    def _list_providers(self) -> list[dict]:
+        """枚举已配置的 LLM provider（控制页视觉模型下拉用）。
+        modalities 为空列表 = 全支持（AstrBot 迁移兼容语义）。"""
+        out = []
+        try:
+            for p in self.context.get_all_providers():
+                try:
+                    meta = p.meta()
+                    modalities = list(p.provider_config.get("modalities") or [])
+                    out.append(
+                        {
+                            "id": meta.id,
+                            "model": meta.model,
+                            "modalities": modalities,
+                            "supports_image": (not modalities) or ("image" in modalities),
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning(f"[desktop_pet] list providers failed: {e}")
+        return out
+
     async def page_scene_config(self):
         if request.method == "GET":
             return {
                 "scene_provider": self._scene_provider(),
                 "scene_blocklist": self._scene_blocklist_str(),
+                "proactive_enabled": self._proactive_enabled(),
+                "scene_enabled": self._scene_enabled(),
+                "scene_interval_min": self._scene_interval_min(),
+                "providers": self._list_providers(),
             }
         payload = await request.json(default={})
         updated = {}
         if "scene_provider" in payload:
             v = str(payload["scene_provider"]).strip()  # 允许留空（跟随会话默认模型）
+            if v:
+                known = {p["id"] for p in self._list_providers()}
+                if known and v not in known:
+                    return error_response(
+                        f"provider「{v}」不在已配置列表中，请检查拼写", status_code=400
+                    )
             self.config["scene_provider"] = v
             updated["scene_provider"] = v
         if "scene_blocklist" in payload:
             v = str(payload["scene_blocklist"]).strip() or DEFAULT_SCENE_BLOCKLIST
             self.config["scene_blocklist"] = v
             updated["scene_blocklist"] = v
+        if "proactive_enabled" in payload:
+            v = bool(payload["proactive_enabled"])
+            self.config["proactive_enabled"] = v
+            updated["proactive_enabled"] = v
+        if "scene_enabled" in payload:
+            v = bool(payload["scene_enabled"])
+            self.config["scene_enabled"] = v
+            updated["scene_enabled"] = v
+        if "scene_interval_min" in payload:
+            try:
+                v = max(1, int(payload["scene_interval_min"]))
+            except (TypeError, ValueError):
+                return error_response("invalid value for scene_interval_min", status_code=400)
+            self.config["scene_interval_min"] = v
+            updated["scene_interval_min"] = v
         self._persist_config()
         return {"saved": True, "updated": updated}
 

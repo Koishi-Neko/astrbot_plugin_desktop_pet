@@ -25,20 +25,27 @@ async function loadFileConfig() {
   }
 }
 
+// 地址归一化：允许只填面板根地址（如 http://localhost:6185），自动补插件扩展路径
+function normalizeBaseUrl(u) {
+  let s = (u || "").trim().replace(/\/+$/, "");
+  if (s && !/\/api\/v1(\/|$)/.test(s)) s += "/api/v1/plugins/extensions";
+  return s;
+}
+
 function loadConfig() {
   return {
-    baseUrl: (
+    baseUrl: normalizeBaseUrl(
       localStorage.getItem("pet_base_url") ||
-      (fileConfig && fileConfig.base_url) ||
-      DEFAULT_BASE_URL
-    ).replace(/\/+$/, ""),
+        (fileConfig && fileConfig.base_url) ||
+        DEFAULT_BASE_URL
+    ),
     apiKey:
       localStorage.getItem("pet_api_key") || (fileConfig && fileConfig.api_key) || "",
   };
 }
 
 function saveConfig(baseUrl, apiKey) {
-  localStorage.setItem("pet_base_url", baseUrl.trim().replace(/\/+$/, ""));
+  localStorage.setItem("pet_base_url", normalizeBaseUrl(baseUrl));
   localStorage.setItem("pet_api_key", apiKey.trim());
 }
 
@@ -332,9 +339,11 @@ let sending = false;
 const invoke = () => window.__TAURI__.core.invoke;
 const listenEvent = (name, cb) => window.__TAURI__.event.listen(name, cb);
 
-// open API 根地址：base_url 是 .../api/v1/plugins/extensions，去掉后两段得到 .../api/v1
+// open API 根地址：base_url 是 .../api/v1/plugins/extensions，取 /api/v1 前缀
 function openApiRoot(baseUrl) {
-  return baseUrl.replace(/\/plugins\/extensions$/, "");
+  const m = baseUrl.match(/^(.*\/api\/v1)(\/|$)/);
+  if (!m) throw new Error("AstrBot 地址格式不正确（应包含 /api/v1），请在设置里修正");
+  return m[1];
 }
 
 const PET_EMOTION_TAG = /^\s*【([^】]{1,8})】\s*/;
@@ -383,12 +392,12 @@ async function sendChat(text, opts = {}) {
   const image = opts.image || null; // {attachmentId}：随消息附截图（桌面感知）
   const provider = opts.provider || ""; // 强制 selected_provider（识图需视觉模型）
   const skipToken = !!opts.skipToken; // 允许模型回【略过】静默丢弃
-  if (sending || !text.trim()) return;
+  if (sending || !text.trim()) return "error";
   const cfg = loadConfig();
   if (!cfg.apiKey) {
     showBubble();
     queueType("先在右键菜单「设置」里填入 AstrBot 的 API Key 哦。");
-    return;
+    return "error";
   }
   sending = true;
   const prevLastChatAt = lastChatAt;
@@ -437,19 +446,28 @@ async function sendChat(text, opts = {}) {
     if (skipToken && /^【\s*略过\s*】/.test((zh || full).trim())) {
       silent = true;
       hideBubble();
-      return;
+      return "silent";
     }
     setEmotion(emotion);
     for (const seg of splitSentences(zh || full)) queueType(seg);
     scheduleBubbleHide();
     if (voiceEnabled && jp) speakJp(jp, cfg);
+    return "spoken";
   } catch (err) {
     console.error(err);
     typeQueue.length = 0;
     bubbleText.textContent = "";
     setEmotion("难过");
-    queueType("连接不上 AstrBot 了……检查一下面板和 API Key 吧。");
+    const msg = String((err && err.message) || err || "");
+    if (/HTTP 40[13]/.test(msg)) {
+      queueType("API Key 无效或权限（scope）不足……去 AstrBot 面板检查一下 Key 吧。");
+    } else if (/HTTP \d+/.test(msg)) {
+      queueType("AstrBot 返回了错误……" + msg.slice(0, 60));
+    } else {
+      queueType("连接不上 AstrBot 了……检查一下面板和 API Key 吧。");
+    }
     scheduleBubbleHide();
+    return "error";
   } finally {
     if (unlisten) unlisten();
     sending = false;
@@ -585,10 +603,6 @@ $("menu-settings").addEventListener("click", () => {
   $("cfg-base-url").value = cfg.baseUrl;
   $("cfg-api-key").value = cfg.apiKey;
   $("cfg-voice").checked = voiceEnabled;
-  $("cfg-proactive").checked = proactiveEnabled();
-  const sp = sceneParams();
-  $("cfg-scene").checked = sp.enabled;
-  $("cfg-scene-interval").value = String(sp.intervalMin);
   $("cfg-message").textContent = "";
   settings.classList.remove("hidden");
 });
@@ -596,21 +610,6 @@ $("menu-settings").addEventListener("click", () => {
 $("cfg-voice").addEventListener("change", () => {
   voiceEnabled = $("cfg-voice").checked;
   localStorage.setItem("pet_voice", voiceEnabled ? "1" : "0");
-});
-
-$("cfg-proactive").addEventListener("change", () => {
-  localStorage.setItem("pet_proactive", $("cfg-proactive").checked ? "1" : "0");
-  showStatusTip($("cfg-proactive").checked ? "主动对话已开启" : "主动对话已关闭", 2000);
-});
-
-$("cfg-scene").addEventListener("change", () => {
-  localStorage.setItem("pet_scene", $("cfg-scene").checked ? "1" : "0");
-  showStatusTip($("cfg-scene").checked ? "桌面感知已开启" : "桌面感知已关闭", 2000);
-});
-
-$("cfg-scene-interval").addEventListener("change", () => {
-  localStorage.setItem("pet_scene_interval", $("cfg-scene-interval").value);
-  showStatusTip(`观察间隔已设为 ${$("cfg-scene-interval").value} 分钟`, 2000);
 });
 
 $("menu-quit").addEventListener("click", () => {
@@ -626,13 +625,18 @@ $("cfg-save").addEventListener("click", () => {
 $("cfg-close").addEventListener("click", () => settings.classList.add("hidden"));
 
 $("cfg-test").addEventListener("click", async () => {
-  const baseUrl = $("cfg-base-url").value.trim().replace(/\/+$/, "");
+  const baseUrl = normalizeBaseUrl($("cfg-base-url").value);
   const apiKey = $("cfg-api-key").value.trim();
   $("cfg-message").textContent = "测试中…";
   try {
-    const text = await invoke()("pet_health", { baseUrl, apiKey });
-    const data = JSON.parse(text);
-    $("cfg-message").textContent = `连接成功（默认模型可用：${data.default_provider_available}）`;
+    const text = await invoke()("pet_capabilities", { baseUrl, apiKey });
+    const c = JSON.parse(text);
+    const rows = ["✓ 连接成功"];
+    rows.push(c.plugin ? "✓ plugin scope（插件路由）" : "✗ plugin scope：去面板 API Keys 补上");
+    if (c.plugin) rows.push(c.provider ? "✓ 默认对话模型可用" : "✗ 默认对话模型不可用");
+    rows.push(c.chat ? "✓ chat scope（对话）" : "✗ chat scope：去面板 API Keys 补上");
+    rows.push(c.file ? "✓ file scope（桌面感知上传）" : "✗ file scope：去面板 API Keys 补上");
+    $("cfg-message").textContent = rows.join("\n");
   } catch (err) {
     $("cfg-message").textContent = `连接失败：${err}`;
   }
@@ -858,18 +862,10 @@ function applyProactiveConfig() {
   };
 }
 
-// 开关：localStorage > config.local.json > 默认开
-function proactiveEnabled() {
-  const v = localStorage.getItem("pet_proactive");
-  if (v !== null) return v !== "0";
-  const c = fileConfig && fileConfig.proactive;
-  return !(c && c.enabled === false);
-}
-
-// 桌面感知生效参数：视觉模型/禁止抓取名单由插件侧统一下发（控制页配置），
+// 主动对话/桌面感知生效参数：全部由插件侧统一下发（控制页配置），
 // 壳端 120s 缓存远程拉取；插件不可达时回退 config.local.json/内置默认。
-// localStorage 仅保留开关与观察间隔（用户灵活切的项）。
-let sceneRemoteCfg = null; // {provider, blocklist[], fetchedAt}
+// 壳端设置面板只保留连接与本地偏好项。
+let sceneRemoteCfg = null; // {provider, blocklist[], proactive_enabled, scene_enabled, scene_interval_min, fetchedAt}
 const SCENE_REMOTE_TTL_MS = 120_000;
 
 async function fetchSceneConfig(force = false) {
@@ -888,6 +884,9 @@ async function fetchSceneConfig(force = false) {
       sceneRemoteCfg = {
         provider: d.provider.trim(), // 空串 = 跟随会话默认模型（不带 selected_provider）
         blocklist: d.blocklist.map((s) => String(s).toLowerCase()),
+        proactive_enabled: d.proactive_enabled !== false,
+        scene_enabled: d.scene_enabled === true,
+        scene_interval_min: Number(d.scene_interval_min) > 0 ? Number(d.scene_interval_min) : null,
         fetchedAt: Date.now(),
       };
     }
@@ -897,17 +896,21 @@ async function fetchSceneConfig(force = false) {
   return sceneRemoteCfg;
 }
 
+// 总开关：远程 > config.local.json > 默认开
+function proactiveEnabled() {
+  if (sceneRemoteCfg) return sceneRemoteCfg.proactive_enabled;
+  const c = fileConfig && fileConfig.proactive;
+  return !(c && c.enabled === false);
+}
 function sceneEnabled() {
-  const v = localStorage.getItem("pet_scene");
-  if (v !== null) return v === "1";
+  if (sceneRemoteCfg) return sceneRemoteCfg.scene_enabled;
   return !!proactiveParams.scene.enabled;
 }
 function sceneParams() {
   const base = proactiveParams.scene;
-  const iv = parseInt(localStorage.getItem("pet_scene_interval") || "", 10);
   return {
     enabled: sceneEnabled(),
-    intervalMin: Number.isFinite(iv) && iv > 0 ? iv : base.intervalMin,
+    intervalMin: (sceneRemoteCfg && sceneRemoteCfg.scene_interval_min) || base.intervalMin,
     maxIdleMin: base.maxIdleMin,
     // 远程下发后即使空串也以其为准（空 = 跟随会话默认模型）
     provider: sceneRemoteCfg ? sceneRemoteCfg.provider : base.provider,
@@ -1023,6 +1026,17 @@ async function proactiveTick() {
 // ---------- 桌面感知（scene_watch） ----------
 // 抓前台窗口截图 → 上传 /api/v1/file → 视觉模型选说（不值得说则回【略过】静默）。
 // 全屏游戏正是目标场景，不做全屏免打扰；用户离开/自己是前台时不看。
+// lastSceneResult 随状态上报，控制页可见最近一次感知结果。
+let lastSceneResult = null; // {t, outcome: spoke/skip/blocked/error, detail}
+function setLastScene(outcome, detail = "") {
+  lastSceneResult = {
+    t: new Date().toLocaleString("zh-CN", { hour12: false }),
+    outcome,
+    detail: String(detail).slice(0, 80),
+  };
+  reportStatusSoon();
+}
+
 async function sceneWatchTick(ctx, now) {
   const p = sceneParams();
   if (!p.enabled) return;
@@ -1035,6 +1049,7 @@ async function sceneWatchTick(ctx, now) {
     if (now - (proactiveRuleCd.scene_watch_blocked || 0) > 10 * 60_000) {
       proactiveRuleCd.scene_watch_blocked = now;
       proactiveLogFire("scene_watch(blocked)", `前台「${proc}」在禁止抓取名单中，已跳过`);
+      setLastScene("blocked", proc);
     }
     return;
   }
@@ -1064,9 +1079,12 @@ async function sceneWatchTick(ctx, now) {
       skipToken: true,
       image: { attachmentId },
       provider: p2.provider,
+    }).then((r) => {
+      setLastScene(r === "spoken" ? "spoke" : r === "silent" ? "skip" : "error", r === "error" ? "对话管线异常" : where);
     });
   } catch (e) {
     console.warn("[scene] 感知失败:", e);
+    setLastScene("error", e && e.message ? e.message : e);
   }
 }
 
@@ -1102,6 +1120,7 @@ async function reportStatus() {
   try {
     const cfg = loadConfig();
     if (!cfg.apiKey) return;
+    await fetchSceneConfig(); // TTL 守卫，顺带让开关/间隔跟随控制页变更
     const sp = sceneParams();
     await invoke()("pet_post_json", {
       url: cfg.baseUrl + "/desktop_pet/pet/status_report",
@@ -1111,6 +1130,7 @@ async function reportStatus() {
         scene_enabled: sp.enabled,
         scene_interval_min: sp.intervalMin,
         events: window.__proactiveLog(),
+        last_scene: lastSceneResult,
       },
     });
   } catch (e) {
@@ -1128,10 +1148,17 @@ setTimeout(reportStatus, 8000); // 启动后稍候上报首包
 (async () => {
   await loadFileConfig();
   applyProactiveConfig(); // 主动对话参数覆盖（须在 loadFileConfig 之后）
-  // 视觉模型/禁止抓取名单已迁移到插件控制页，清理旧本地覆盖
-  localStorage.removeItem("pet_scene_provider");
-  localStorage.removeItem("pet_scene_blocklist");
-  fetchSceneConfig(true); // 预拉一次远程感知配置，首个观察周期即可用
+  // 主动对话/桌面感知配置已收口插件控制页，清理全部旧本地键
+  for (const k of [
+    "pet_proactive",
+    "pet_scene",
+    "pet_scene_interval",
+    "pet_scene_provider",
+    "pet_scene_blocklist",
+  ]) {
+    localStorage.removeItem(k);
+  }
+  fetchSceneConfig(true); // 预拉一次远程感知配置，首个周期即可用
   initLive2D(); // 异步加载 Live2D，失败自动回退静态立绘
   if (!loadConfig().apiKey) {
     showBubble();
