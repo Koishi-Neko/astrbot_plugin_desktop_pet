@@ -473,6 +473,7 @@ class DesktopPetBridge(Star):
             "桌面上桌宠里与你对话的用户也是他，二者是同一个人。"
         )
 
+    @staticmethod
     def _split_jp(body: str) -> tuple[str, str]:
         """把正文按【JP】拆成 (中文正文, 日语配音稿)；无【JP】时日语稿为空。"""
         parts = _JP_TAG.split(body, maxsplit=1)
