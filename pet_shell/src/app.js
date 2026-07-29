@@ -591,6 +591,8 @@ $("menu-settings").addEventListener("click", () => {
   $("cfg-scene-interval").value = String(sp.intervalMin);
   $("cfg-scene-provider").value = localStorage.getItem("pet_scene_provider") || "";
   $("cfg-scene-provider").placeholder = sp.provider;
+  $("cfg-scene-blocklist").value = localStorage.getItem("pet_scene_blocklist") || "";
+  $("cfg-scene-blocklist").placeholder = sp.blocklist.join(", ");
   $("cfg-message").textContent = "";
   settings.classList.remove("hidden");
 });
@@ -620,6 +622,13 @@ $("cfg-scene-provider").addEventListener("change", () => {
   if (v) localStorage.setItem("pet_scene_provider", v);
   else localStorage.removeItem("pet_scene_provider");
   showStatusTip("视觉模型已更新", 2000);
+});
+
+$("cfg-scene-blocklist").addEventListener("change", () => {
+  const v = $("cfg-scene-blocklist").value.trim();
+  if (v) localStorage.setItem("pet_scene_blocklist", v);
+  else localStorage.removeItem("pet_scene_blocklist");
+  showStatusTip("禁止抓取名单已更新", 2000);
 });
 
 $("menu-quit").addEventListener("click", () => {
@@ -832,6 +841,21 @@ const PROACTIVE_DEFAULTS = {
     intervalMin: 30, // 观察间隔
     maxIdleMin: 10, // 用户空闲超此值不看
     provider: "scnet/Kimi-K2.6", // 视觉模型（modalities 需含 image；v4-pro 接口实测拒收 image_url，勿用）
+    // 禁止抓取的进程名单（小写进程名）：IM/会议/Office 文档，抓取前就拦截
+    blocklist: [
+      "weixin.exe", // 微信 4.x
+      "wechat.exe", // 微信 3.x
+      "wechatappex.exe", // 微信小程序/视频号宿主
+      "wechatplayer.exe",
+      "qq.exe",
+      "tim.exe",
+      "wxwork.exe", // 企业微信
+      "dingtalk.exe", // 钉钉
+      "wemeetapp.exe", // 腾讯会议
+      "winword.exe", // Word
+      "excel.exe", // Excel
+      "powerpnt.exe", // PowerPoint
+    ],
   },
 };
 let proactiveParams = PROACTIVE_DEFAULTS;
@@ -870,14 +894,18 @@ function sceneParams() {
   const base = proactiveParams.scene;
   const iv = parseInt(localStorage.getItem("pet_scene_interval") || "", 10);
   const prov = (localStorage.getItem("pet_scene_provider") || "").trim();
+  const bl = (localStorage.getItem("pet_scene_blocklist") || "").trim();
   return {
     enabled: sceneEnabled(),
     intervalMin: Number.isFinite(iv) && iv > 0 ? iv : base.intervalMin,
     maxIdleMin: base.maxIdleMin,
     provider: prov || base.provider,
+    blocklist: bl
+      ? bl.split(/[,，\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
+      : base.blocklist,
   };
 }
-// 这些进程是前台时不值得看（自己/桌面壳）
+// 这些进程是前台时不值得看（自己/桌面壳；用户名单另行拦截）
 const SCENE_SKIP_PROCESSES = ["pet_shell.exe", "explorer.exe"];
 
 let proactiveLastFiredAt = 0;
@@ -992,6 +1020,14 @@ async function sceneWatchTick(ctx, now) {
   if (ctx.idle_seconds > p.maxIdleMin * 60) return; // 人不在，看了也白看
   const proc = (ctx.foreground_process || "").toLowerCase();
   if (!proc || SCENE_SKIP_PROCESSES.includes(proc)) return;
+  if (p.blocklist.includes(proc)) {
+    // 名单进程（IM/会议/Office 等）：抓取前就拦截，记一条历史便于确认
+    if (now - (proactiveRuleCd.scene_watch_blocked || 0) > 10 * 60_000) {
+      proactiveRuleCd.scene_watch_blocked = now;
+      proactiveLogFire("scene_watch(blocked)", `前台「${proc}」在禁止抓取名单中，已跳过`);
+    }
+    return;
+  }
   proactiveRuleCd.scene_watch = now; // 看过即计，失败也等下个间隔
   try {
     const cfg = loadConfig();

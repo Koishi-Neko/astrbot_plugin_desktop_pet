@@ -91,7 +91,8 @@ npm run build      # 产出独立 exe（src-tauri/target/release/）
       "welcome_back":  { "enabled": true, "awayMinutes": 30,                "cooldownHours": 1 },
       "sedentary":     { "enabled": true, "activeHours": 2,                 "cooldownHours": 2 }
     },
-    "scene": { "enabled": false, "intervalMin": 30, "maxIdleMin": 10, "provider": "scnet/Kimi-K2.6" }
+    "scene": { "enabled": false, "intervalMin": 30, "maxIdleMin": 10, "provider": "scnet/Kimi-K2.6",
+               "blocklist": ["weixin.exe", "wechat.exe", "qq.exe", "wemeetapp.exe", "winword.exe", "excel.exe", "powerpnt.exe"] }
   }
 }
 ```
@@ -101,7 +102,7 @@ npm run build      # 产出独立 exe（src-tauri/target/release/）
 设置面板内还有：
 - **语音（日语配音）**：开关桌宠回复的日语语音播放（仅控制壳端播放，服务端仍按配置合成）。
 - **主动对话（适时插话）**：开关主动对话。开启后壳端每 30s 检查态势（深夜连续活动催睡、离开后回来问候、久坐提醒），满足条件时以情境提示触发一次主动发言；全屏应用前台 / 输入框打开 / 对话中自动免打扰。
-- **桌面感知（看屏幕主动搭话）**：默认关。开启后按「观察间隔」抓取**前台窗口**画面（Windows Graphics Capture 进程级抓取，只含目标窗口内容，遮挡窗口也能抓），经 open API `/api/v1/file` 上传后随情境消息发给「视觉模型」识图：看到值得评论的内容（游戏进展、文档、有趣页面）就自然搭话，没什么值得说的模型回【略过】则静默。**截图会发送给云端 LLM 提供商**；观察间隔与视觉模型均可在设置面板调整（localStorage 即时生效）。要求：API Key 需带 `file` scope；视觉模型需 modalities 含 image（实测 `scnet/Kimi-K2.6` 可用，`deepseek/deepseek-v4-pro` 接口拒收 `image_url` 勿用）。已知限制：独占全屏游戏绕过 DWM 抓不到（无边框窗口化即可）、窗口最小化抓不到、DRM 内容黑帧（自动跳过）。
+- **桌面感知（看屏幕主动搭话）**：默认关。开启后按「观察间隔」抓取**前台窗口**画面（Windows Graphics Capture 进程级抓取，只含目标窗口内容，遮挡窗口也能抓），经 open API `/api/v1/file` 上传后随情境消息发给「视觉模型」识图：看到值得评论的内容（游戏进展、文档、有趣页面）就自然搭话，没什么值得说的模型回【略过】则静默。**截图会发送给云端 LLM 提供商**；观察间隔与视觉模型均可在设置面板调整（localStorage 即时生效）。**禁止抓取名单**：`proactive.scene.blocklist`（或设置面板文本框，逗号分隔进程名）内的进程位于前台时直接跳过、不截图——默认含微信（`weixin`/`wechat` 等）、QQ/TIM、企业微信、钉钉、腾讯会议、Word/Excel/PowerPoint。要求：API Key 需带 `file` scope；视觉模型需 modalities 含 image（实测 `scnet/Kimi-K2.6` 可用，`deepseek/deepseek-v4-pro` 接口拒收 `image_url` 勿用）。已知限制：独占全屏游戏绕过 DWM 抓不到（无边框窗口化即可）、窗口最小化抓不到、DRM 内容黑帧（自动跳过）。
 
 ## 六、操作
 
