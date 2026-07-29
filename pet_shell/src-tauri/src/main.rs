@@ -9,6 +9,8 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+mod capture;
+
 static CLICK_THROUGH: AtomicBool = AtomicBool::new(false);
 
 fn set_click_through_state(app: &tauri::AppHandle, enabled: bool) {
@@ -74,14 +76,29 @@ async fn pet_open_chat(
     message: String,
     session_id: String,
     username: String,
+    attachment_id: Option<String>,
+    provider: Option<String>,
 ) -> Result<(), String> {
     use tauri::Emitter;
     tauri::async_runtime::spawn(async move {
-        let body = serde_json::json!({
-            "message": message,
+        // 带图时 message 为富文本段列表（attachment_id 需先经 /api/v1/file 上传换取）
+        let attachment_id = attachment_id.filter(|s| !s.is_empty());
+        let msg = match &attachment_id {
+            Some(aid) => serde_json::json!([
+                {"type": "plain", "text": message},
+                {"type": "image", "attachment_id": aid}
+            ]),
+            None => serde_json::Value::String(message),
+        };
+        let mut body = serde_json::json!({
+            "message": msg,
             "session_id": session_id,
             "username": username,
         });
+        // 强制指定 provider（识图请求需切到 modalities 含 image 的模型）
+        if let Some(p) = provider.filter(|s| !s.is_empty()) {
+            body["selected_provider"] = serde_json::Value::String(p);
+        }
 
         let client = reqwest::Client::new();
         let resp = match client
@@ -164,6 +181,47 @@ async fn pet_tts(url: String, api_key: String, text: String) -> Result<String, S
     } else {
         Err(format!("HTTP {status}: {text}"))
     }
+}
+
+/// 文件上传：POST open API /api/v1/file（multipart），返回响应文本（含 attachment_id）。
+/// 桌面感知截图上传用；要求 API Key 带 file scope。
+#[tauri::command]
+async fn pet_upload_file(
+    url: String,
+    api_key: String,
+    filename: String,
+    content_type: String,
+    data_b64: String,
+) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&data_b64)
+        .map_err(|e| e.to_string())?;
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(&content_type)
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("X-API-Key", &api_key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(format!("HTTP {status}: {text}"))
+    }
+}
+
+/// 桌面感知：抓取当前前台窗口画面（WGC 进程级），返回 JPEG base64 与窗口信息。
+#[tauri::command]
+fn capture_window() -> Result<capture::CaptureResult, String> {
+    capture::capture_foreground()
 }
 
 // ---------- 态势感知（主动对话用） ----------
@@ -270,6 +328,8 @@ fn main() {
             pet_health,
             pet_open_chat,
             pet_tts,
+            pet_upload_file,
+            capture_window,
             get_system_context
         ])
         .setup(|app| {

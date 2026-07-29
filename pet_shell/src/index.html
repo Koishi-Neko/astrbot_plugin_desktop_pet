@@ -37,6 +37,18 @@
     <input id="cfg-api-key" type="password" spellcheck="false" />
     <label class="settings-checkbox"><input id="cfg-voice" type="checkbox" /> 语音（日语配音）</label>
     <label class="settings-checkbox"><input id="cfg-proactive" type="checkbox" /> 主动对话（适时插话）</label>
+    <label class="settings-checkbox"><input id="cfg-scene" type="checkbox" /> 桌面感知（看屏幕主动搭话）</label>
+    <div id="scene-opts">
+      <label>观察间隔</label>
+      <select id="cfg-scene-interval">
+        <option value="10">10 分钟</option>
+        <option value="15">15 分钟</option>
+        <option value="30">30 分钟</option>
+        <option value="60">60 分钟</option>
+      </select>
+      <label>视觉模型</label>
+      <input id="cfg-scene-provider" type="text" spellcheck="false" placeholder="scnet/Kimi-K2.6" />
+    </div>
     <div class="settings-buttons">
       <button id="cfg-test">测试连接</button>
       <button id="cfg-save">保存</button>

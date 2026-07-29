@@ -231,6 +231,16 @@ body {
   margin: 0;
 }
 
+#scene-opts select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+  background: #fff;
+}
+
 .settings-buttons {
   display: flex;
   gap: 6px;

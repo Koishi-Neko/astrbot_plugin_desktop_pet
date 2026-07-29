@@ -380,6 +380,9 @@ async function speakJp(jpText, cfg) {
 
 async function sendChat(text, opts = {}) {
   const proactive = !!opts.proactive; // 主动发言：不占用/不聚焦输入框
+  const image = opts.image || null; // {attachmentId}：随消息附截图（桌面感知）
+  const provider = opts.provider || ""; // 强制 selected_provider（识图需视觉模型）
+  const skipToken = !!opts.skipToken; // 允许模型回【略过】静默丢弃
   if (sending || !text.trim()) return;
   const cfg = loadConfig();
   if (!cfg.apiKey) {
@@ -388,12 +391,14 @@ async function sendChat(text, opts = {}) {
     return;
   }
   sending = true;
+  const prevLastChatAt = lastChatAt;
   lastChatAt = Date.now();
   if (!proactive) chatInput.disabled = true;
   showBubble();
   queueType("…");
 
   let full = "";
+  let silent = false; // 命中【略过】：静默收尾，还原气泡与 lastChatAt
   let unlisten = null;
   let resolveFinished;
   const finished = new Promise((resolve) => (resolveFinished = resolve));
@@ -416,6 +421,8 @@ async function sendChat(text, opts = {}) {
       message: text,
       sessionId: PET_SESSION_ID,
       username: PET_SESSION_ID,
+      attachmentId: image ? image.attachmentId : "",
+      provider,
     });
     const { error } = await finished;
 
@@ -427,6 +434,11 @@ async function sendChat(text, opts = {}) {
     if (!full) throw new Error("AstrBot 返回了空内容");
 
     const { emotion, zh, jp } = parsePetReply(full);
+    if (skipToken && /^【\s*略过\s*】/.test((zh || full).trim())) {
+      silent = true;
+      hideBubble();
+      return;
+    }
     setEmotion(emotion);
     for (const seg of splitSentences(zh || full)) queueType(seg);
     scheduleBubbleHide();
@@ -441,7 +453,7 @@ async function sendChat(text, opts = {}) {
   } finally {
     if (unlisten) unlisten();
     sending = false;
-    lastChatAt = Date.now();
+    lastChatAt = silent ? prevLastChatAt : Date.now(); // 略过不算发言，不占全局节流
     if (!proactive) {
       chatInput.disabled = false;
       chatInput.focus();
@@ -574,6 +586,11 @@ $("menu-settings").addEventListener("click", () => {
   $("cfg-api-key").value = cfg.apiKey;
   $("cfg-voice").checked = voiceEnabled;
   $("cfg-proactive").checked = proactiveEnabled();
+  const sp = sceneParams();
+  $("cfg-scene").checked = sp.enabled;
+  $("cfg-scene-interval").value = String(sp.intervalMin);
+  $("cfg-scene-provider").value = localStorage.getItem("pet_scene_provider") || "";
+  $("cfg-scene-provider").placeholder = sp.provider;
   $("cfg-message").textContent = "";
   settings.classList.remove("hidden");
 });
@@ -586,6 +603,23 @@ $("cfg-voice").addEventListener("change", () => {
 $("cfg-proactive").addEventListener("change", () => {
   localStorage.setItem("pet_proactive", $("cfg-proactive").checked ? "1" : "0");
   showStatusTip($("cfg-proactive").checked ? "主动对话已开启" : "主动对话已关闭", 2000);
+});
+
+$("cfg-scene").addEventListener("change", () => {
+  localStorage.setItem("pet_scene", $("cfg-scene").checked ? "1" : "0");
+  showStatusTip($("cfg-scene").checked ? "桌面感知已开启" : "桌面感知已关闭", 2000);
+});
+
+$("cfg-scene-interval").addEventListener("change", () => {
+  localStorage.setItem("pet_scene_interval", $("cfg-scene-interval").value);
+  showStatusTip(`观察间隔已设为 ${$("cfg-scene-interval").value} 分钟`, 2000);
+});
+
+$("cfg-scene-provider").addEventListener("change", () => {
+  const v = $("cfg-scene-provider").value.trim();
+  if (v) localStorage.setItem("pet_scene_provider", v);
+  else localStorage.removeItem("pet_scene_provider");
+  showStatusTip("视觉模型已更新", 2000);
 });
 
 $("menu-quit").addEventListener("click", () => {
@@ -792,6 +826,13 @@ const PROACTIVE_DEFAULTS = {
     welcome_back: { enabled: true, awayMinutes: 30, cooldownHours: 1 },
     sedentary: { enabled: true, activeHours: 2, cooldownHours: 2 },
   },
+  // 桌面感知（scene_watch）：抓前台窗口截图→视觉模型识图→选说（【略过】静默）
+  scene: {
+    enabled: false, // 默认关，UI/配置开启（截屏上传云端 LLM，由用户掌控）
+    intervalMin: 30, // 观察间隔
+    maxIdleMin: 10, // 用户空闲超此值不看
+    provider: "scnet/Kimi-K2.6", // 视觉模型（modalities 需含 image；v4-pro 接口实测拒收 image_url，勿用）
+  },
 };
 let proactiveParams = PROACTIVE_DEFAULTS;
 
@@ -807,6 +848,7 @@ function applyProactiveConfig() {
         { ...v, ...((c.rules && c.rules[k]) || {}) },
       ])
     ),
+    scene: { ...PROACTIVE_DEFAULTS.scene, ...(c.scene || {}) },
   };
 }
 
@@ -817,6 +859,26 @@ function proactiveEnabled() {
   const c = fileConfig && fileConfig.proactive;
   return !(c && c.enabled === false);
 }
+
+// 桌面感知生效参数：localStorage（UI 三件套）> config.local.json proactive.scene > 默认
+function sceneEnabled() {
+  const v = localStorage.getItem("pet_scene");
+  if (v !== null) return v === "1";
+  return !!proactiveParams.scene.enabled;
+}
+function sceneParams() {
+  const base = proactiveParams.scene;
+  const iv = parseInt(localStorage.getItem("pet_scene_interval") || "", 10);
+  const prov = (localStorage.getItem("pet_scene_provider") || "").trim();
+  return {
+    enabled: sceneEnabled(),
+    intervalMin: Number.isFinite(iv) && iv > 0 ? iv : base.intervalMin,
+    maxIdleMin: base.maxIdleMin,
+    provider: prov || base.provider,
+  };
+}
+// 这些进程是前台时不值得看（自己/桌面壳）
+const SCENE_SKIP_PROCESSES = ["pet_shell.exe", "explorer.exe"];
 
 let proactiveLastFiredAt = 0;
 const proactiveRuleCd = {}; // ruleId -> 上次触发时间
@@ -848,6 +910,7 @@ const PROACTIVE_RULES = [
   {
     id: "night_owl", // 深夜催睡
     when: (s, p) => {
+      if (s.isFullscreen) return false; // 全屏应用（游戏/视频）免打扰
       const h = new Date().getHours();
       const inWindow =
         p.startHour <= p.endHour
@@ -860,13 +923,13 @@ const PROACTIVE_RULES = [
   },
   {
     id: "welcome_back", // 回来问候
-    when: (s, p) => s.justReturnedFromMs > p.awayMinutes * 60_000,
+    when: (s, p) => !s.isFullscreen && s.justReturnedFromMs > p.awayMinutes * 60_000,
     prompt: (s) =>
       `【情境】主人离开了${fmtDur(s.justReturnedFromMs)}，刚刚回到电脑前。请主动对主人说一句话，欢迎主人回来。`,
   },
   {
     id: "sedentary", // 久坐提醒
-    when: (s, p) => s.activeMs > p.activeHours * 3600_000,
+    when: (s, p) => !s.isFullscreen && s.activeMs > p.activeHours * 3600_000,
     prompt: (s) =>
       `【情境】主人已经连续使用电脑${fmtDur(s.activeMs)}没有休息了。请主动对主人说一句话，关心一下主人的身体。`,
   },
@@ -898,8 +961,10 @@ async function proactiveTick() {
   if (now - proactiveLastFiredAt < globalCdMs) return;
   if (now - lastChatAt < globalCdMs) return; // 刚正常聊过也别插话
   const ctx = await invoke()("get_system_context", {}).catch(() => null);
-  if (!ctx || ctx.is_fullscreen) return; // 全屏应用（游戏/视频）免打扰
+  if (!ctx) return;
   const s = proactiveState(ctx);
+  s.isFullscreen = !!ctx.is_fullscreen; // 全屏门槛已下沉到各规则 when()
+  let fired = false;
   for (const rule of PROACTIVE_RULES) {
     const p = proactiveParams.rules[rule.id];
     if (!p || !p.enabled) continue;
@@ -907,11 +972,53 @@ async function proactiveTick() {
     if (!rule.when(s, p)) continue;
     proactiveRuleCd[rule.id] = now;
     proactiveLastFiredAt = now;
+    fired = true;
     const text = rule.prompt(s);
     console.log(`[proactive] 触发规则 ${rule.id}`, s);
     proactiveLogFire(rule.id, text);
     sendChat(text, { proactive: true });
     break;
+  }
+  if (!fired) await sceneWatchTick(ctx, now);
+}
+
+// ---------- 桌面感知（scene_watch） ----------
+// 抓前台窗口截图 → 上传 /api/v1/file → 视觉模型选说（不值得说则回【略过】静默）。
+// 全屏游戏正是目标场景，不做全屏免打扰；用户离开/自己是前台时不看。
+async function sceneWatchTick(ctx, now) {
+  const p = sceneParams();
+  if (!p.enabled) return;
+  if (now - (proactiveRuleCd.scene_watch || 0) < p.intervalMin * 60_000) return;
+  if (ctx.idle_seconds > p.maxIdleMin * 60) return; // 人不在，看了也白看
+  const proc = (ctx.foreground_process || "").toLowerCase();
+  if (!proc || SCENE_SKIP_PROCESSES.includes(proc)) return;
+  proactiveRuleCd.scene_watch = now; // 看过即计，失败也等下个间隔
+  try {
+    const cfg = loadConfig();
+    if (!cfg.apiKey) return;
+    const shot = await invoke()("capture_window", {});
+    const up = await invoke()("pet_upload_file", {
+      url: openApiRoot(cfg.baseUrl) + "/file",
+      apiKey: cfg.apiKey,
+      filename: "scene.jpg",
+      contentType: "image/jpeg",
+      dataB64: shot.jpeg_b64,
+    });
+    const upJson = JSON.parse(up);
+    const attachmentId = upJson.attachment_id || (upJson.data && upJson.data.attachment_id);
+    if (!attachmentId) throw new Error("上传响应无 attachment_id: " + up);
+    const where = shot.window_title || shot.process;
+    const prompt = `【情境】这是主人当前前台窗口「${where}」的截图。如果你看到值得评论的内容（比如游戏进展、正在写的文档、有趣的页面），就自然地对主人说一两句；如果没什么值得说的，只回复【略过】。`;
+    console.log("[scene] 触发桌面感知:", where);
+    proactiveLogFire("scene_watch", prompt);
+    sendChat(prompt, {
+      proactive: true,
+      skipToken: true,
+      image: { attachmentId },
+      provider: p.provider,
+    });
+  } catch (e) {
+    console.warn("[scene] 感知失败:", e);
   }
 }
 
@@ -931,6 +1038,14 @@ window.__proactiveFire = (ruleId) => {
 window.__proactiveLog = () => JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
 window.__proactiveParams = () => proactiveParams;
 window.__proactiveTick = proactiveTick;
+window.__sceneShot = () => invoke()("capture_window", {}); // CDP 调试用：抓一帧看效果
+window.__sceneWatch = async () => { // CDP 调试用：强制一次桌面感知（跳间隔跳条件）
+  const ctx = await invoke()("get_system_context", {}).catch(() => null);
+  if (!ctx) return "no_ctx";
+  proactiveRuleCd.scene_watch = 0;
+  await sceneWatchTick(ctx, Date.now());
+  return "done";
+};
 
 // 启动提示
 (async () => {
