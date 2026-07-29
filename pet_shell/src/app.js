@@ -589,10 +589,6 @@ $("menu-settings").addEventListener("click", () => {
   const sp = sceneParams();
   $("cfg-scene").checked = sp.enabled;
   $("cfg-scene-interval").value = String(sp.intervalMin);
-  $("cfg-scene-provider").value = localStorage.getItem("pet_scene_provider") || "";
-  $("cfg-scene-provider").placeholder = sp.provider;
-  $("cfg-scene-blocklist").value = localStorage.getItem("pet_scene_blocklist") || "";
-  $("cfg-scene-blocklist").placeholder = sp.blocklist.join(", ");
   $("cfg-message").textContent = "";
   settings.classList.remove("hidden");
 });
@@ -615,20 +611,6 @@ $("cfg-scene").addEventListener("change", () => {
 $("cfg-scene-interval").addEventListener("change", () => {
   localStorage.setItem("pet_scene_interval", $("cfg-scene-interval").value);
   showStatusTip(`观察间隔已设为 ${$("cfg-scene-interval").value} 分钟`, 2000);
-});
-
-$("cfg-scene-provider").addEventListener("change", () => {
-  const v = $("cfg-scene-provider").value.trim();
-  if (v) localStorage.setItem("pet_scene_provider", v);
-  else localStorage.removeItem("pet_scene_provider");
-  showStatusTip("视觉模型已更新", 2000);
-});
-
-$("cfg-scene-blocklist").addEventListener("change", () => {
-  const v = $("cfg-scene-blocklist").value.trim();
-  if (v) localStorage.setItem("pet_scene_blocklist", v);
-  else localStorage.removeItem("pet_scene_blocklist");
-  showStatusTip("禁止抓取名单已更新", 2000);
 });
 
 $("menu-quit").addEventListener("click", () => {
@@ -884,7 +866,37 @@ function proactiveEnabled() {
   return !(c && c.enabled === false);
 }
 
-// 桌面感知生效参数：localStorage（UI 三件套）> config.local.json proactive.scene > 默认
+// 桌面感知生效参数：视觉模型/禁止抓取名单由插件侧统一下发（控制页配置），
+// 壳端 120s 缓存远程拉取；插件不可达时回退 config.local.json/内置默认。
+// localStorage 仅保留开关与观察间隔（用户灵活切的项）。
+let sceneRemoteCfg = null; // {provider, blocklist[], fetchedAt}
+const SCENE_REMOTE_TTL_MS = 120_000;
+
+async function fetchSceneConfig(force = false) {
+  if (!force && sceneRemoteCfg && Date.now() - sceneRemoteCfg.fetchedAt < SCENE_REMOTE_TTL_MS) {
+    return sceneRemoteCfg;
+  }
+  try {
+    const cfg = loadConfig();
+    if (!cfg.apiKey) return sceneRemoteCfg;
+    const text = await invoke()("pet_get", {
+      url: cfg.baseUrl + "/desktop_pet/pet/scene_config",
+      apiKey: cfg.apiKey,
+    });
+    const d = JSON.parse(text);
+    if (d && d.provider && Array.isArray(d.blocklist)) {
+      sceneRemoteCfg = {
+        provider: String(d.provider),
+        blocklist: d.blocklist.map((s) => String(s).toLowerCase()),
+        fetchedAt: Date.now(),
+      };
+    }
+  } catch (e) {
+    console.warn("[scene] 拉取远程感知配置失败（沿用旧值/默认）:", e);
+  }
+  return sceneRemoteCfg;
+}
+
 function sceneEnabled() {
   const v = localStorage.getItem("pet_scene");
   if (v !== null) return v === "1";
@@ -893,16 +905,12 @@ function sceneEnabled() {
 function sceneParams() {
   const base = proactiveParams.scene;
   const iv = parseInt(localStorage.getItem("pet_scene_interval") || "", 10);
-  const prov = (localStorage.getItem("pet_scene_provider") || "").trim();
-  const bl = (localStorage.getItem("pet_scene_blocklist") || "").trim();
   return {
     enabled: sceneEnabled(),
     intervalMin: Number.isFinite(iv) && iv > 0 ? iv : base.intervalMin,
     maxIdleMin: base.maxIdleMin,
-    provider: prov || base.provider,
-    blocklist: bl
-      ? bl.split(/[,，\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
-      : base.blocklist,
+    provider: (sceneRemoteCfg && sceneRemoteCfg.provider) || base.provider,
+    blocklist: (sceneRemoteCfg && sceneRemoteCfg.blocklist) || base.blocklist,
   };
 }
 // 这些进程是前台时不值得看（自己/桌面壳；用户名单另行拦截）
@@ -932,6 +940,7 @@ function proactiveLogFire(ruleId, promptText) {
     });
     localStorage.setItem("pet_proactive_log", JSON.stringify(logs.slice(-20)));
   } catch {}
+  reportStatusSoon(); // 有新动态就尽快同步到控制页
 }
 
 const PROACTIVE_RULES = [
@@ -1029,6 +1038,8 @@ async function sceneWatchTick(ctx, now) {
     return;
   }
   proactiveRuleCd.scene_watch = now; // 看过即计，失败也等下个间隔
+  await fetchSceneConfig(); // 过期才发请求；配置来自插件控制页
+  const p2 = sceneParams(); // 拉取后可能更新了 provider/blocklist
   try {
     const cfg = loadConfig();
     if (!cfg.apiKey) return;
@@ -1051,7 +1062,7 @@ async function sceneWatchTick(ctx, now) {
       proactive: true,
       skipToken: true,
       image: { attachmentId },
-      provider: p.provider,
+      provider: p2.provider,
     });
   } catch (e) {
     console.warn("[scene] 感知失败:", e);
@@ -1083,10 +1094,43 @@ window.__sceneWatch = async () => { // CDP 调试用：强制一次桌面感知�
   return "done";
 };
 
+// ---------- 状态上报（控制页「主动对话/桌面感知动态」监控） ----------
+// 60s 心跳 + 每次触发后（防抖 5s）上报开关/间隔/最近事件；插件内存暂存，重启即清
+let reportTimer = null;
+async function reportStatus() {
+  try {
+    const cfg = loadConfig();
+    if (!cfg.apiKey) return;
+    const sp = sceneParams();
+    await invoke()("pet_post_json", {
+      url: cfg.baseUrl + "/desktop_pet/pet/status_report",
+      apiKey: cfg.apiKey,
+      body: {
+        proactive_enabled: proactiveEnabled(),
+        scene_enabled: sp.enabled,
+        scene_interval_min: sp.intervalMin,
+        events: window.__proactiveLog(),
+      },
+    });
+  } catch (e) {
+    console.warn("[report] 状态上报失败:", e);
+  }
+}
+function reportStatusSoon() {
+  if (reportTimer) clearTimeout(reportTimer);
+  reportTimer = setTimeout(reportStatus, 5000);
+}
+setInterval(reportStatus, 60_000);
+setTimeout(reportStatus, 8000); // 启动后稍候上报首包
+
 // 启动提示
 (async () => {
   await loadFileConfig();
   applyProactiveConfig(); // 主动对话参数覆盖（须在 loadFileConfig 之后）
+  // 视觉模型/禁止抓取名单已迁移到插件控制页，清理旧本地覆盖
+  localStorage.removeItem("pet_scene_provider");
+  localStorage.removeItem("pet_scene_blocklist");
+  fetchSceneConfig(true); // 预拉一次远程感知配置，首个观察周期即可用
   initLive2D(); // 异步加载 Live2D，失败自动回退静态立绘
   if (!loadConfig().apiKey) {
     showBubble();

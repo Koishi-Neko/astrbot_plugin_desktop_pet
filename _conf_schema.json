@@ -58,5 +58,17 @@
         "hint": "开启后，bot 在全部 QQ 群聊/私聊的回复格式为「中文正文【JP】日语配音稿」，文字显示中文，同时附带一条日语配音语音。需要 SBV2 语音服务在线；模型未输出【JP】或合成失败时自动降级为纯文字。",
         "type": "bool",
         "default": false
+    },
+    "scene_provider": {
+        "description": "桌面感知视觉模型",
+        "hint": "桌宠抓取前台窗口截图后，强制用该 provider 识图（需 modalities 含 image，如 scnet/Kimi-K2.6）。壳端远程拉取此配置；deepseek-v4-pro 接口实测拒收 image_url，勿用。",
+        "type": "string",
+        "default": "scnet/Kimi-K2.6"
+    },
+    "scene_blocklist": {
+        "description": "桌面感知禁止抓取进程名单",
+        "hint": "逗号/空白分隔的小写进程名。名单内进程位于前台时不截图（抓取前拦截）。默认含微信/QQ/TIM/企业微信/钉钉/腾讯会议/Office 三件套。",
+        "type": "string",
+        "default": "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, winword.exe, excel.exe, powerpnt.exe"
     }
 }

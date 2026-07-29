@@ -6,10 +6,12 @@
 本插件经 on_llm_request 钩子识别桌宠会话并注入格式要求（情绪/日语配音/主人身份）。
 
 自有路由（挂在 dashboard 插件扩展路径下，需带 plugin scope 的 API Key 鉴权）：
-- GET  /api/v1/plugins/extensions/desktop_pet/pet/health   探活，返回 JSON
-- POST /api/v1/plugins/extensions/desktop_pet/pet/tts      日语 TTS 合成（壳端按句调用）
-- GET  /api/v1/plugins/extensions/desktop_pet/pet/personas 列出 AstrBot 人格
-- astrbot_plugin_desktop_pet/page/*                        WebUI 控制页后端
+- GET  /api/v1/plugins/extensions/desktop_pet/pet/health        探活，返回 JSON
+- POST /api/v1/plugins/extensions/desktop_pet/pet/tts           日语 TTS 合成（壳端按句调用）
+- GET  /api/v1/plugins/extensions/desktop_pet/pet/personas      列出 AstrBot 人格
+- GET  /api/v1/plugins/extensions/desktop_pet/pet/scene_config  桌面感知配置（壳端远程拉取）
+- POST /api/v1/plugins/extensions/desktop_pet/pet/status_report 壳端状态上报（监控用）
+- astrbot_plugin_desktop_pet/page/*                             WebUI 控制页后端
 
 TTS：配置 tts_enabled=true 后，要求模型输出「【情绪】中文正文【JP】日语配音稿」，
 壳端解析出日语句后逐句调 pet/tts，插件转发 Style-Bert-VITS2（server_fastapi）合成返回 base64 wav。
@@ -81,6 +83,19 @@ PAGE_CONFIG_KEYS = (
     "qq_jp_dub_enabled",
 )
 
+# 桌面感知（壳端远程拉取，控制页编辑；一次性配置，不放壳端设置面板）
+SCENE_CONFIG_KEYS = (
+    "scene_provider",
+    "scene_blocklist",
+)
+
+DEFAULT_SCENE_PROVIDER = "scnet/Kimi-K2.6"
+DEFAULT_SCENE_BLOCKLIST = (
+    "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, "
+    "qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, "
+    "winword.exe, excel.exe, powerpnt.exe"
+)
+
 
 class DesktopPetBridge(Star):
     def __init__(self, context: Context, config: dict | None = None):
@@ -88,6 +103,7 @@ class DesktopPetBridge(Star):
         self.config = config or {}
 
     async def initialize(self):
+        self._shell_report = None  # 壳端最近一次状态上报 {"at": epoch, ...}
         self.context.register_web_api(
             "desktop_pet/pet/health",
             self.health,
@@ -105,6 +121,18 @@ class DesktopPetBridge(Star):
             self.personas,
             ["GET"],
             "列出 AstrBot 人格",
+        )
+        self.context.register_web_api(
+            "desktop_pet/pet/scene_config",
+            self.pet_scene_config,
+            ["GET"],
+            "桌宠壳远程拉取桌面感知配置（视觉模型/禁止抓取名单）",
+        )
+        self.context.register_web_api(
+            "desktop_pet/pet/status_report",
+            self.pet_status_report,
+            ["POST"],
+            "桌宠壳状态上报（主动对话/桌面感知监控用）",
         )
         # 控制页 API 前缀必须是插件全名（bridge 按插件名转发）
         self.context.register_web_api(
@@ -136,6 +164,12 @@ class DesktopPetBridge(Star):
             self.page_tts_test,
             ["POST"],
             "桌宠控制页：TTS 试听",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/scene_config",
+            self.page_scene_config,
+            ["GET", "POST"],
+            "桌宠控制页：读写桌面感知配置",
         )
         logger.info(
             "[desktop_pet] web api registered: desktop_pet/pet/*, desktop_pet/page/*"
@@ -189,6 +223,42 @@ class DesktopPetBridge(Star):
             logger.warning(f"[desktop_pet] list personas failed: {e}")
         return {"default": mgr.default_persona, "personas": out}
 
+    # ---------- 桌面感知配置（壳端远程拉取） ----------
+
+    def _scene_provider(self) -> str:
+        return str(self.config.get("scene_provider") or DEFAULT_SCENE_PROVIDER).strip()
+
+    def _scene_blocklist_str(self) -> str:
+        return str(self.config.get("scene_blocklist") or DEFAULT_SCENE_BLOCKLIST).strip()
+
+    @staticmethod
+    def _parse_blocklist(raw: str) -> list[str]:
+        return [s.strip().lower() for s in re.split(r"[,，\s]+", raw or "") if s.strip()]
+
+    async def pet_scene_config(self):
+        """壳端拉取桌面感知配置：{"provider": str, "blocklist": [..]}"""
+        return {
+            "provider": self._scene_provider(),
+            "blocklist": self._parse_blocklist(self._scene_blocklist_str()),
+        }
+
+    async def pet_status_report(self):
+        """壳端状态上报（主动对话/桌面感知监控），仅存内存，重启即清。"""
+        raw = await request.body()
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            body = {}
+        events = body.get("events")
+        self._shell_report = {
+            "at": time.time(),
+            "proactive_enabled": bool(body.get("proactive_enabled")),
+            "scene_enabled": bool(body.get("scene_enabled")),
+            "scene_interval_min": body.get("scene_interval_min"),
+            "events": events[-20:] if isinstance(events, list) else [],
+        }
+        return {"ok": True}
+
     # ---------- 控制页（pages/pet）后端 ----------
 
     def _tts_base_url(self) -> str:
@@ -208,7 +278,7 @@ class DesktopPetBridge(Star):
             if os.path.exists(path):
                 with open(path, encoding="utf-8-sig") as f:
                     data = json.load(f)
-            for k in TTS_CONFIG_KEYS + PAGE_CONFIG_KEYS:
+            for k in TTS_CONFIG_KEYS + PAGE_CONFIG_KEYS + SCENE_CONFIG_KEYS:
                 if k in self.config:
                     data[k] = self.config[k]
             with open(path, "w", encoding="utf-8") as f:
@@ -246,6 +316,14 @@ class DesktopPetBridge(Star):
             "qq_jp_dub_enabled": self._qq_jp_dub_enabled(),
             "default_persona": default_persona,
             "sbv2": await self._sbv2_status(),
+            "scene": {
+                "provider": self._scene_provider(),
+                "blocklist": self._parse_blocklist(self._scene_blocklist_str()),
+            },
+            "shell_report": self._shell_report,
+            "shell_report_age_s": (
+                round(time.time() - self._shell_report["at"]) if self._shell_report else None
+            ),
         }
 
     async def page_sbv2_models(self):
@@ -309,6 +387,25 @@ class DesktopPetBridge(Star):
         if audio is None:
             return error_response("合成失败，请检查 SBV2 服务与参数", status_code=502)
         return {"audio": audio, "format": "wav"}
+
+    async def page_scene_config(self):
+        if request.method == "GET":
+            return {
+                "scene_provider": self._scene_provider(),
+                "scene_blocklist": self._scene_blocklist_str(),
+            }
+        payload = await request.json(default={})
+        updated = {}
+        if "scene_provider" in payload:
+            v = str(payload["scene_provider"]).strip() or DEFAULT_SCENE_PROVIDER
+            self.config["scene_provider"] = v
+            updated["scene_provider"] = v
+        if "scene_blocklist" in payload:
+            v = str(payload["scene_blocklist"]).strip() or DEFAULT_SCENE_BLOCKLIST
+            self.config["scene_blocklist"] = v
+            updated["scene_blocklist"] = v
+        self._persist_config()
+        return {"saved": True, "updated": updated}
 
     # ---------- 管道模式：给桌宠 webchat 会话追加输出格式要求 ----------
 

@@ -218,6 +218,44 @@ async fn pet_upload_file(
     }
 }
 
+/// 通用 GET（带 API Key），返回响应文本。壳端拉取插件配置等场景用。
+#[tauri::command]
+async fn pet_get(url: String, api_key: String) -> Result<String, String> {
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("X-API-Key", &api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(format!("HTTP {status}: {text}"))
+    }
+}
+
+/// 通用 POST JSON（带 API Key），返回响应文本。壳端状态上报等场景用。
+#[tauri::command]
+async fn pet_post_json(url: String, api_key: String, body: serde_json::Value) -> Result<String, String> {
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", &api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(format!("HTTP {status}: {text}"))
+    }
+}
+
 /// 桌面感知：抓取当前前台窗口画面（WGC 进程级），返回 JPEG base64 与窗口信息。
 #[tauri::command]
 fn capture_window() -> Result<capture::CaptureResult, String> {
@@ -329,6 +367,8 @@ fn main() {
             pet_open_chat,
             pet_tts,
             pet_upload_file,
+            pet_get,
+            pet_post_json,
             capture_window,
             get_system_context
         ])

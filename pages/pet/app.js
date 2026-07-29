@@ -31,6 +31,33 @@ async function refreshStatus() {
       `主人身份：${esc(s.master_name || "（未设置昵称）")}${s.master_qq ? ` (QQ ${esc(s.master_qq)})` : ""}\n` +
       `QQ 日语配音：${s.qq_jp_dub_enabled ? "已启用" : "已禁用"}\n` +
       `默认人格：${esc(s.default_persona || "（未设置）")}`;
+
+    // 主动对话 / 桌面感知动态（壳端上报，插件内存暂存）
+    const r = s.shell_report;
+    if (!r) {
+      $("pet-report").innerHTML = `<span class="bad">● 暂无桌宠上报</span>（桌宠未运行或版本过旧；上报周期 60s）`;
+      $("pet-events").innerHTML = "";
+    } else {
+      const age = s.shell_report_age_s;
+      const stale = age == null || age > 180;
+      const scene = s.scene || {};
+      $("pet-report").innerHTML =
+        `上报：${stale ? '<span class="bad">● 已过期' : '<span class="ok">● 在线'}（${age ?? "?"} 秒前）</span>\n` +
+        `主动对话：${r.proactive_enabled ? "已启用" : "已禁用"}\n` +
+        `桌面感知：${r.scene_enabled ? `已启用 · 每 ${r.scene_interval_min ?? "?"} 分钟` : "已禁用"}\n` +
+        `视觉模型：${esc(scene.provider || "（未配置）")}\n` +
+        `禁止抓取：${esc(((scene.blocklist || []).join(", ")) || "（空）")}`;
+      const evs = (r.events || []).slice().reverse();
+      $("pet-events").innerHTML = evs.length
+        ? evs
+            .map(
+              (e) =>
+                `<div class="ev"><span class="t">${esc(e.t || "")}</span>` +
+                `<span class="rule">${esc(e.rule || "")}</span>${esc(e.prompt || "")}</div>`
+            )
+            .join("")
+        : `<div class="warn">暂无触发记录</div>`;
+    }
   } catch (e) {
     $("status-box").textContent = "状态获取失败：" + e.message;
   }
@@ -157,6 +184,32 @@ async function saveConfig() {
   }
 }
 
+// ---------- 桌面感知配置区 ----------
+
+async function loadSceneConfig() {
+  const cfg = await bridge.apiGet("page/scene_config");
+  $("scene-provider").value = cfg.scene_provider || "";
+  $("scene-blocklist").value = cfg.scene_blocklist || "";
+}
+
+async function saveSceneConfig() {
+  $("btn-save-scene").disabled = true;
+  $("scene-save-msg").textContent = "保存中…";
+  try {
+    await bridge.apiPost("page/scene_config", {
+      scene_provider: $("scene-provider").value.trim(),
+      scene_blocklist: $("scene-blocklist").value.trim(),
+    });
+    $("scene-save-msg").textContent = "已保存，壳端约 2 分钟内拉取生效。";
+    refreshStatus();
+  } catch (e) {
+    $("scene-save-msg").textContent = "保存失败：" + e.message;
+  } finally {
+    $("btn-save-scene").disabled = false;
+    setTimeout(() => ($("scene-save-msg").textContent = ""), 5000);
+  }
+}
+
 // ---------- 试听 ----------
 
 async function testTts() {
@@ -185,6 +238,7 @@ await bridge.ready();
 $("btn-refresh").addEventListener("click", refreshStatus);
 $("btn-save-master").addEventListener("click", saveMasterConfig);
 $("btn-save-dub").addEventListener("click", saveJpDub);
+$("btn-save-scene").addEventListener("click", saveSceneConfig);
 $("btn-save").addEventListener("click", saveConfig);
 $("btn-test").addEventListener("click", testTts);
 $("tts-model").addEventListener("change", () => {
@@ -199,6 +253,6 @@ $("tts-length").addEventListener("input", () => {
 });
 
 await loadConfig();
-await Promise.all([refreshStatus(), loadModels(), loadMasterConfig()]);
+await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig()]);
 // 配置里的 style/speaker 选中值在模型列表加载后应用一次
 onModelChange();

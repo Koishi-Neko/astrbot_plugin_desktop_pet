@@ -49,6 +49,29 @@
       </section>
 
       <section class="card">
+        <div class="card-title">主动对话 / 桌面感知动态</div>
+        <div id="pet-report" class="kv">加载中…</div>
+        <div id="pet-events" class="events"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">桌面感知配置</div>
+        <div class="warn">桌宠按间隔抓取前台窗口截图发给视觉模型识图搭话。以下两项为一次性配置，壳端远程拉取（约 2 分钟内生效）；开关与观察间隔在桌宠右键「设置」里。</div>
+        <label class="row">
+          <span class="label">视觉模型</span>
+          <input type="text" id="scene-provider" placeholder="scnet/Kimi-K2.6" spellcheck="false" />
+        </label>
+        <label class="row">
+          <span class="label">禁止抓取进程</span>
+          <textarea id="scene-blocklist" rows="3" spellcheck="false" placeholder="逗号分隔的小写进程名；名单内进程在前台时不截图"></textarea>
+        </label>
+        <div class="row buttons">
+          <button id="btn-save-scene" class="btn primary">保存感知配置</button>
+          <span id="scene-save-msg" class="msg"></span>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-title">TTS 语音配置</div>
         <label class="row checkbox-row">
           <input type="checkbox" id="tts-enabled" />
