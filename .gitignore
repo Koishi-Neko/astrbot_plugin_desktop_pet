@@ -7,5 +7,8 @@ pet_shell/src-tauri/target/
 pet_shell/src-tauri/gen/
 **/config.local.json
 # Live2D 模型与第三方渲染库为受版权保护的素材，仅本地使用，不入库
-pet_shell/src/assets/live2d/
+#（用 /* 而非目录本身，否则无法对子目录做反排除）
+pet_shell/src/assets/live2d/*
 pet_shell/src/vendor/
+# 例外：桃濑日和（hiyori_free）为 Live2D 官方免费示例模型，随仓库分发作默认模型
+!pet_shell/src/assets/live2d/hiyori/

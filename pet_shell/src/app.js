@@ -67,7 +67,6 @@ let currentEmotion = "平静";
 
 // ---------- Live2D ----------
 
-const LIVE2D_MODEL_URL = "assets/live2d/chino/chino.model3.json";
 let live2dModel = null;
 
 // 情绪 -> 模型表情（智乃模型 expressions/ 下的表情，null = 恢复默认表情）
@@ -81,6 +80,38 @@ const EMOTION_EXPRESSIONS = {
   "疑惑": "confused",
   "调皮": "closed_smile",
 };
+
+// 模型能力档案：不同模型的表情/动作差异在此收口。
+// hiyori（桃濑日和，官方免费示例模型）无 exp3 表情文件，但有动作组。
+const MODEL_PROFILES = {
+  chino: {
+    expressions: EMOTION_EXPRESSIONS,
+    idleMotion: "idle_sway",
+    coinSway: true, // 长待机演出（程序化动作，智乃专属）
+    pokeMotions: ["nod", "tilt", "sway", "shake"],
+    pokeExprs: ["closed_smile", "pout", "blush", "o_surprised"],
+    idleMotions: null, // null = 用 IDLE_ACTIONS 原列表
+  },
+  hiyori: {
+    expressions: null, // 无表情文件，情绪仅走气泡/语音
+    idleMotion: "Idle",
+    coinSway: false,
+    pokeMotions: ["Tap", "Flick", "Tap@Body", "Flick@Body", "FlickDown"],
+    pokeExprs: [],
+    idleMotions: ["Flick", "FlickDown", "Tap", "Tap@Body", "Flick@Body"],
+  },
+};
+let activeProfile = MODEL_PROFILES.chino; // 加载成功后按实际模型设置
+
+// 加载候选：显式自定义（config.local.json live2d.model_url）> 本地智乃 > 内置桃濑日和
+function modelCandidates() {
+  const list = [];
+  const custom = fileConfig && fileConfig.live2d && fileConfig.live2d.model_url;
+  if (custom) list.push({ key: "chino", url: custom });
+  list.push({ key: "chino", url: "assets/live2d/chino/chino.model3.json" });
+  list.push({ key: "hiyori", url: "assets/live2d/hiyori/hiyori.model3.json" });
+  return list;
+}
 
 async function initLive2D() {
   try {
@@ -97,7 +128,20 @@ async function initLive2D() {
       resolution: window.devicePixelRatio || 1, // 高分屏按物理像素渲染
       autoDensity: true,
     });
-    const model = await PIXI.live2d.Live2DModel.from(LIVE2D_MODEL_URL);
+    let model = null;
+    let usedKey = null;
+    for (const c of modelCandidates()) {
+      try {
+        model = await PIXI.live2d.Live2DModel.from(c.url);
+        usedKey = c.key;
+        break;
+      } catch (e) {
+        console.warn(`Live2D 模型加载失败（${c.url}），尝试下一个：`, e.message || e);
+      }
+    }
+    if (!model) throw new Error("所有候选模型均加载失败");
+    activeProfile = MODEL_PROFILES[usedKey] || MODEL_PROFILES.chino;
+    console.log(`[live2d] 使用模型档案: ${usedKey}`);
     app.stage.addChild(model);
     // 记录未缩放的本地尺寸（pivot 必须用本地坐标）
     const localW = model.width;
@@ -117,15 +161,17 @@ async function initLive2D() {
 
     live2dModel = model;
     avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
-    model.motion("idle_sway"); // 待机增强版（原 idle + 低频摆动）
+    model.motion(activeProfile.idleMotion).catch(() => {}); // 待机动作
     // 任何动作播完都回到待机循环；长待机演出自然结束时复位演出状态
     // 注意两点：
     // 1. motionFinish 只在 internalModel.motionManager 上派发（Live2DModel 不转发）；
     // 2. 必须用 FORCE：被播完的动作若是 FORCE 优先级，此时当前优先级尚未重置，
-    //    NORMAL 会被优先级检查拒绝，导致 idle_sway 接不上
+    //    NORMAL 会被优先级检查拒绝，导致待机动作接不上
     model.internalModel.motionManager.on("motionFinish", () => {
       onLongIdleFinished();
-      model.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+      model
+        .motion(activeProfile.idleMotion, 0, PIXI.live2d.MotionPriority.FORCE)
+        .catch(() => {});
     });
   } catch (e) {
     console.warn("Live2D 初始化失败，回退为静态立绘：", e);
@@ -144,7 +190,9 @@ function resetExpression() {
 
 function playEmotionMotion(label) {
   if (!live2dModel) return;
-  const expr = EMOTION_EXPRESSIONS[label];
+  const exprs = activeProfile.expressions;
+  if (!exprs) return; // 当前模型无表情文件（如桃濑日和），情绪仅走气泡/语音
+  const expr = exprs[label];
   try {
     if (expr) {
       live2dModel.expression(expr);
@@ -162,9 +210,10 @@ function setEmotion(label) {
   currentEmotion = EMOTION_FILES[label] ? label : "平静";
   playEmotionMotion(currentEmotion);
   avatar.src = `assets/${EMOTION_FILES[currentEmotion]}.png`;
-  // 非默认情绪 8s 后自动回正为默认表情
+  // 非默认情绪 8s 后自动回正为默认表情（仅当前模型有对应表情文件时）
+  const hasExpr = activeProfile.expressions && activeProfile.expressions[currentEmotion];
   if (emotionResetTimer) clearTimeout(emotionResetTimer);
-  if (EMOTION_EXPRESSIONS[currentEmotion]) {
+  if (hasExpr) {
     emotionResetTimer = setTimeout(() => {
       emotionResetTimer = null;
       currentEmotion = "平静";
@@ -527,10 +576,7 @@ avatar.parentElement.addEventListener("dblclick", () => {
   if (!inputBar.classList.contains("hidden")) chatInput.focus();
 });
 
-// 戳一戳：随机动作或短暂表情
-const POKE_MOTIONS = ["nod", "tilt", "sway", "shake"];
-const POKE_EXPRS = ["closed_smile", "pout", "blush", "o_surprised"];
-
+// 戳一戳：随机动作或短暂表情（动作/表情池按当前模型档案）
 function poke() {
   if (!live2dModel) {
     playEmotionMotion("高兴");
@@ -538,17 +584,22 @@ function poke() {
   }
   // 长待机演出中：只允许表情互动，动作不被打断
   if (longIdleActive) {
-    const x = POKE_EXPRS[Math.floor(Math.random() * POKE_EXPRS.length)];
+    const pool0 = activeProfile.pokeExprs;
+    if (!pool0.length) return;
+    const x = pool0[Math.floor(Math.random() * pool0.length)];
     console.log("[poke-idle] expr:", x);
     flashExpression(x, 2500);
     return;
   }
-  if (Math.random() < 0.6) {
-    const m = POKE_MOTIONS[Math.floor(Math.random() * POKE_MOTIONS.length)];
+  const canExpr = activeProfile.pokeExprs.length > 0;
+  if (Math.random() < 0.6 || !canExpr) {
+    const pool = activeProfile.pokeMotions;
+    const m = pool[Math.floor(Math.random() * pool.length)];
     console.log("[poke]", m);
     live2dModel.motion(m).catch(() => {});
   } else {
-    const x = POKE_EXPRS[Math.floor(Math.random() * POKE_EXPRS.length)];
+    const pool = activeProfile.pokeExprs;
+    const x = pool[Math.floor(Math.random() * pool.length)];
     console.log("[poke] expr:", x);
     flashExpression(x, 2500);
   }
@@ -713,10 +764,11 @@ setInterval(() => {
 }, 500);
 
 function flashExpression(name, ms = 3500) {
+  if (!activeProfile.expressions) return; // 无表情文件的模型（桃濑日和）跳过
   live2dModel.expression(name);
   setTimeout(() => {
     // 恢复到当前情绪对应的表情
-    const expr = EMOTION_EXPRESSIONS[currentEmotion];
+    const expr = activeProfile.expressions[currentEmotion];
     if (expr) {
       live2dModel.expression(expr);
     } else {
@@ -737,8 +789,9 @@ let lastChatAt = Date.now(); // 最近一次对话时间，25s 无对话保底�
 const LONG_IDLE_TRIGGER_MS = 25000;
 
 // 长待机演出为 60s 单次动作（末尾 4s 曲线内淡出），播完经 motionFinish 平滑回待机；
-// 对话/戳一戳均不打断
+// 对话/戳一戳均不打断。仅智乃档案启用（coin_sway 是其专属程序化动作）
 function enterLongIdle() {
+  if (!activeProfile.coinSway) return;
   longIdleActive = true;
   console.log("[idle] 进入长待机演出");
   live2dModel.motion("coin_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
@@ -747,9 +800,15 @@ function enterLongIdle() {
   coinIdleTimer = setTimeout(exitLongIdle, 62000);
 }
 
-// 保底触发：25s 无对话自动进入演出（对话中与演出中不触发）
+// 保底触发：25s 无对话自动进入演出（对话中与演出中不触发；无 coin_sway 能力的模型跳过）
 setInterval(() => {
-  if (live2dModel && !sending && !longIdleActive && Date.now() - lastChatAt > LONG_IDLE_TRIGGER_MS) {
+  if (
+    activeProfile.coinSway &&
+    live2dModel &&
+    !sending &&
+    !longIdleActive &&
+    Date.now() - lastChatAt > LONG_IDLE_TRIGGER_MS
+  ) {
     enterLongIdle();
   }
 }, 1000);
@@ -760,7 +819,9 @@ function exitLongIdle() {
   console.log("[idle] 长待机演出结束");
   clearTimeout(coinIdleTimer);
   if (live2dModel) {
-    live2dModel.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+    live2dModel
+      .motion(activeProfile.idleMotion, 0, PIXI.live2d.MotionPriority.FORCE)
+      .catch(() => {});
   }
 }
 
@@ -785,12 +846,27 @@ const IDLE_ACTIONS = [
   ["gaze", gazeWander],
 ];
 
+// 按当前模型档案取待机动作池（hiyori 用其动作组，无表情项）
+function currentIdleActions() {
+  if (activeProfile.idleMotions) {
+    return [
+      ...activeProfile.idleMotions.map((m) => [
+        m,
+        () => live2dModel.motion(m).catch(() => {}),
+      ]),
+      ["gaze", gazeWander],
+    ];
+  }
+  return IDLE_ACTIONS;
+}
+
 function scheduleIdleAction() {
   const delay = 25000 + Math.random() * 35000; // 25~60s
   setTimeout(() => {
     try {
       if (live2dModel && !sending && !longIdleActive) {
-        const [name, act] = IDLE_ACTIONS[Math.floor(Math.random() * IDLE_ACTIONS.length)];
+        const actions = currentIdleActions();
+        const [name, act] = actions[Math.floor(Math.random() * actions.length)];
         act();
         console.log("[idle] 随机待机动作:", name);
       }

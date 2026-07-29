@@ -120,25 +120,31 @@ npm run build      # 产出独立 exe（src-tauri/target/release/）
 
 ## 七、立绘与 Live2D
 
-### 静态立绘（兜底）
+### 内置默认模型：桃濑日和（Momose Hiyori）
 
-`pet_shell/src/assets/` 下按情绪命名（英文文件名，避免资产协议对非 ASCII 文件名的兼容问题）：`calm.png`（平静）、`happy.png`（高兴）、`angry.png`（生气）、`shy.png`（害羞）、`surprised.png`（惊讶）、`sad.png`（难过）、`confused.png`（疑惑）、`playful.png`（调皮）。同名覆盖即可（建议透明背景 PNG，256×256 以上）。仓库内置的是脚本生成的占位图（`pet_shell/tools/gen_assets.py`）。
+仓库内置 Live2D 官方免费示例模型**桃濑日和 FREE 版**（`pet_shell/src/assets/live2d/hiyori/`，插画：Kani Biimu / 模型：Live2D），开箱即有完整的 Live2D 桌宠（待机动作组、眨眼、物理、口型同步）。
 
-### Live2D（推荐）
+- **许可**：Live2D Cubism 示例模型许可——普通用户及小规模企业可商用（中/大规模企业仅限非公开内部试用），详见模型目录内 `ReadMe.txt` 与[官方许可页](https://www.live2d.com/zh-CHS/download/sample-data/)。
+- **能力差异**：该模型无表情文件（exp3.json），情绪反馈以气泡/语音呈现；戳一戳与随机待机使用其自带动作组（Tap/Flick 等）；长待机演出（coin_sway）与程序化表情为智乃档案专属，在日和上自动停用。
+- **加载顺序**：`config.local.json` 的 `live2d.model_url`（可选显式指定）→ `assets/live2d/chino/chino.model3.json`（本地自定义位，gitignore）→ 内置日和 → 静态兜底。模型能力按 `src/app.js` 的 `MODEL_PROFILES` 档案分流。
 
-桌宠优先尝试加载 `pet_shell/src/assets/live2d/chino/chino.model3.json`（Cubism 3/4 模型，pixi-live2d-display 渲染），加载失败自动回退静态立绘。
+### 自定义模型
 
-- **模型自备**：Live2D 模型与渲染库涉及版权与 Live2D SDK 许可，**不包含在仓库中**（已 gitignore），请自行准备：
-  - 模型：任意 Cubism 3/4 模型目录（含 `.moc3`、`model3.json`、贴图、`motions/`、`expressions/`），放到 `src/assets/live2d/chino/` 并把入口文件命名为 `chino.model3.json`；**模型文件名与 model3.json 内部引用需为全 ASCII**（Tauri 资产协议对非 ASCII 路径支持不佳）。
-  - 渲染库（下载到 `src/vendor/`）：`pixi.js@6.5.x` 的 `pixi.min.js`、`pixi-live2d-display@0.4.0` 的 `cubism4.min.js`、Live2D 官方的 `live2dcubismcore.min.js`。
-- **情绪映射**：`src/app.js` 的 `EMOTION_EXPRESSIONS` 把 8 种情绪映射到模型表情（expression 名称），`null` 表示恢复默认表情；按你的模型实际表情名修改即可。
-- **程序化动作**：`pet_shell/tools/gen_motions.py` 程序化生成 motion3.json（点头/摇头/歪头/摇摆/待机增强 `idle_sway`/长待机演出 `coin_sway` 等）并自动注册进 model3.json；改 `AMPLITUDES` 常量即可调整幅度，重跑脚本即重新生成。
+任意 Cubism 3/4 模型放到 `src/assets/live2d/chino/` 并把入口命名为 `chino.model3.json`（或改用 `live2d.model_url` 指向你的入口），即可覆盖默认模型——**模型文件名与 model3.json 内部引用需为全 ASCII**（Tauri 资产协议对非 ASCII 路径支持不佳）。模型与第三方渲染库涉及版权与 Live2D SDK 许可，自定义模型不入库（已 gitignore）。
+
+- **渲染库自备**（下载到 `src/vendor/`）：`pixi.js@6.5.x` 的 `pixi.min.js`、`pixi-live2d-display@0.4.0` 的 `cubism4.min.js`、Live2D 官方的 `live2dcubismcore.min.js`。
+- **情绪映射**：`src/app.js` 的 `EMOTION_EXPRESSIONS` 把 8 种情绪映射到模型表情（expression 名称，智乃档案），`null` 表示恢复默认表情；按你的模型实际表情名修改即可。
+- **程序化动作**：`pet_shell/tools/gen_motions.py` 程序化生成 motion3.json（点头/摇头/歪头/摇摆/待机增强 `idle_sway`/长待机演出 `coin_sway` 等）并自动注册进 model3.json（智乃档案专用）；改 `AMPLITUDES` 常量即可调整幅度，重跑脚本即重新生成。
 - **灵动待机系统**（`src/app.js`）：
   - 视线跟随鼠标（3 秒看门狗缓动回正；点击穿透模式下自动失效）；
   - 随机待机调度：每 25~60 秒随机触发小动作、短暂表情或视线游移；对话与演出期间自动暂停；
-  - 长待机演出 `coin_sway`：45 秒的手部形态保持 + 头身慢摇，FORCE 优先级进出，演出中发消息立即退出。
+  - 长待机演出 `coin_sway`（智乃档案）：45 秒的手部形态保持 + 头身慢摇，FORCE 优先级进出，演出中发消息立即退出。
 - **调试**：`pet_shell/src/lab/index.html` 是动作实验室（`python -m http.server 8765` 后开 `http://localhost:8765/lab/`），按钮即时播放任意动作/表情调参；`probe.html` 是运行时参数记录探针。
 - 注意：`model.expression()` 不传参会**随机**应用表情，恢复默认必须用 `expressionManager.resetExpression()`。
+
+### 静态立绘（兜底）
+
+Live2D 加载失败时回退 `img#avatar` 静态立绘（按情绪切换 `assets/<emotion>.png`）。仓库不再内置占位图，兜底状态下立绘区域为透明（不影响功能）；如需静态兜底图，用 `pet_shell/tools/gen_assets.py` 生成或自行放置同名 PNG。
 
 ## 八、TTS 语音（可选）
 
