@@ -822,7 +822,7 @@ const PROACTIVE_DEFAULTS = {
     enabled: false, // 默认关，UI/配置开启（截屏上传云端 LLM，由用户掌控）
     intervalMin: 30, // 观察间隔
     maxIdleMin: 10, // 用户空闲超此值不看
-    provider: "scnet/Kimi-K2.6", // 视觉模型（modalities 需含 image；v4-pro 接口实测拒收 image_url，勿用）
+    provider: "scnet/Kimi-K2.6", // 视觉模型（需支持图片输入）
     // 禁止抓取的进程名单（小写进程名）：IM/会议/Office 文档，抓取前就拦截
     blocklist: [
       "weixin.exe", // 微信 4.x
