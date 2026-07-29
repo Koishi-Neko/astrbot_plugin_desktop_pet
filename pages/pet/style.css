@@ -76,18 +76,6 @@ textarea {
   resize: vertical;
   font-family: Consolas, monospace;
 }
-.events { margin-top: 8px; font-size: 12px; }
-.events .ev {
-  padding: 4px 8px;
-  border-left: 3px solid #d4637f;
-  margin: 4px 0;
-  background: rgba(211, 99, 127, 0.06);
-  border-radius: 0 6px 6px 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.events .ev .t { color: #999; margin-right: 8px; }
-.events .ev .rule { color: #d4637f; font-weight: 600; margin-right: 8px; }
 @media (prefers-color-scheme: dark) {
   body { color: #ddd; }
   .card { background: #26262e; border-color: #3a3a46; }
@@ -99,5 +87,4 @@ textarea {
   .btn:hover { background: #d4637f; }
   .btn.primary { background: #d4637f; }
   textarea { background: #1e1e24; color: #eee; border-color: #555; }
-  .events .ev { background: rgba(211, 99, 127, 0.12); }
 }
