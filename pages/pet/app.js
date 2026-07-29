@@ -44,7 +44,7 @@ async function refreshStatus() {
         `上报：${stale ? '<span class="bad">● 已过期' : '<span class="ok">● 在线'}（${age ?? "?"} 秒前）</span>\n` +
         `主动对话：${r.proactive_enabled ? "已启用" : "已禁用"}\n` +
         `桌面感知：${r.scene_enabled ? `已启用 · 每 ${r.scene_interval_min ?? "?"} 分钟` : "已禁用"}\n` +
-        `视觉模型：${esc(scene.provider || "（未配置）")}\n` +
+        `视觉模型：${esc(scene.provider || "（留空）跟随会话默认模型")}\n` +
         `禁止抓取：${esc(((scene.blocklist || []).join(", ")) || "（空）")}`;
     }
   } catch (e) {

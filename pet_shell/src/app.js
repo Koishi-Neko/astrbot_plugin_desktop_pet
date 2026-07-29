@@ -822,7 +822,7 @@ const PROACTIVE_DEFAULTS = {
     enabled: false, // 默认关，UI/配置开启（截屏上传云端 LLM，由用户掌控）
     intervalMin: 30, // 观察间隔
     maxIdleMin: 10, // 用户空闲超此值不看
-    provider: "scnet/Kimi-K2.6", // 视觉模型（需支持图片输入）
+    provider: "", // 视觉模型；空 = 跟随会话默认模型（插件控制页下发为准）
     // 禁止抓取的进程名单（小写进程名）：IM/会议/Office 文档，抓取前就拦截
     blocklist: [
       "weixin.exe", // 微信 4.x
@@ -884,9 +884,9 @@ async function fetchSceneConfig(force = false) {
       apiKey: cfg.apiKey,
     });
     const d = JSON.parse(text);
-    if (d && d.provider && Array.isArray(d.blocklist)) {
+    if (d && typeof d.provider === "string" && Array.isArray(d.blocklist)) {
       sceneRemoteCfg = {
-        provider: String(d.provider),
+        provider: d.provider.trim(), // 空串 = 跟随会话默认模型（不带 selected_provider）
         blocklist: d.blocklist.map((s) => String(s).toLowerCase()),
         fetchedAt: Date.now(),
       };
@@ -909,7 +909,8 @@ function sceneParams() {
     enabled: sceneEnabled(),
     intervalMin: Number.isFinite(iv) && iv > 0 ? iv : base.intervalMin,
     maxIdleMin: base.maxIdleMin,
-    provider: (sceneRemoteCfg && sceneRemoteCfg.provider) || base.provider,
+    // 远程下发后即使空串也以其为准（空 = 跟随会话默认模型）
+    provider: sceneRemoteCfg ? sceneRemoteCfg.provider : base.provider,
     blocklist: (sceneRemoteCfg && sceneRemoteCfg.blocklist) || base.blocklist,
   };
 }

@@ -89,7 +89,6 @@ SCENE_CONFIG_KEYS = (
     "scene_blocklist",
 )
 
-DEFAULT_SCENE_PROVIDER = "scnet/Kimi-K2.6"
 DEFAULT_SCENE_BLOCKLIST = (
     "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, "
     "qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, "
@@ -226,7 +225,8 @@ class DesktopPetBridge(Star):
     # ---------- 桌面感知配置（壳端远程拉取） ----------
 
     def _scene_provider(self) -> str:
-        return str(self.config.get("scene_provider") or DEFAULT_SCENE_PROVIDER).strip()
+        # 空串 = 跟随会话默认模型（壳端不传 selected_provider）
+        return str(self.config.get("scene_provider") or "").strip()
 
     def _scene_blocklist_str(self) -> str:
         return str(self.config.get("scene_blocklist") or DEFAULT_SCENE_BLOCKLIST).strip()
@@ -397,7 +397,7 @@ class DesktopPetBridge(Star):
         payload = await request.json(default={})
         updated = {}
         if "scene_provider" in payload:
-            v = str(payload["scene_provider"]).strip() or DEFAULT_SCENE_PROVIDER
+            v = str(payload["scene_provider"]).strip()  # 允许留空（跟随会话默认模型）
             self.config["scene_provider"] = v
             updated["scene_provider"] = v
         if "scene_blocklist" in payload:

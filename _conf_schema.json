@@ -61,9 +61,9 @@
     },
     "scene_provider": {
         "description": "桌面感知视觉模型",
-        "hint": "桌宠抓取前台窗口截图后，使用该 provider 进行识图。填写支持图片输入（视觉）的 provider ID；若模型不支持图片输入，识图会失败并自动跳过本轮。",
+        "hint": "桌宠抓取前台窗口截图后，使用该 provider 进行识图。留空则跟随会话默认模型——默认模型若不支持图片输入，识图会失败并自动跳过本轮。",
         "type": "string",
-        "default": "scnet/Kimi-K2.6"
+        "default": ""
     },
     "scene_blocklist": {
         "description": "桌面感知禁止抓取进程名单",
