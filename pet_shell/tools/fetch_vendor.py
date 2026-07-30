@@ -19,6 +19,11 @@ import sys
 import tempfile
 import urllib.request
 
+# CI/裸控制台可能是非 UTF-8 代码页（cp1252/GBK），强制 UTF-8 输出防 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 VENDOR_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "vendor")
 )
