@@ -4,6 +4,7 @@
   "private": true,
   "description": "AstrBot 桌面桌宠壳（Tauri 2）",
   "scripts": {
+    "tauri": "tauri",
     "setup": "python tools/fetch_vendor.py",
     "predev": "python tools/fetch_vendor.py",
     "dev": "tauri dev",

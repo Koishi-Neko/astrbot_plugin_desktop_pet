@@ -36,7 +36,7 @@ jobs:
         working-directory: pet_shell
         run: python tools/fetch_vendor.py
 
-      # tauri-action 默认创建 draft release，网页端检查无误后手动 Publish
+      # tauri-action 直接发布 Release（非草稿）；如需先检查可改 releaseDraft: true
       - name: Build Tauri app & create release (NSIS installer)
         uses: tauri-apps/tauri-action@v0
         env:
