@@ -1,181 +1,129 @@
 # astrbot_plugin_desktop_pet
 
-把 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 变成桌面桌宠的大脑。本仓库包含两部分：
+**中文** | [English](README_EN.md)
 
-- **AstrBot 插件**（仓库根目录）：在 AstrBot 内挂载 HTTP 路由与 WebUI 控制页，经 `on_llm_request` / `on_decorating_result` 钩子为桌宠会话注入情绪/日语配音格式要求与主人身份标注，并代理 Style-Bert-VITS2 合成语音。
-- **桌宠壳**（`pet_shell/`，Tauri 2 + 纯 HTML/JS）：Windows 桌面上的透明、无边框、置顶小窗，Live2D 立绘（随情绪切表情 + 程序化动作）、打字机气泡、聊天输入、灵动待机、主动对话，通过 AstrBot open API 与插件实时对话。
+把 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 变成 Windows 桌面 Live2D 桌宠的大脑：桌宠是 AstrBot 里的一个 webchat 会话，人格、记忆、历史全都在 AstrBot 侧，换个皮就是同一个它。
 
-```
-桌宠壳 (Windows)                          AstrBot
-┌───────────────────────┐  open API SSE  ┌──────────────────────────────┐
-│ Tauri 透明置顶窗口     │ ─────────────► │ /api/v1/chat (webchat 管道)   │
-│ Live2D / 气泡 / 输入框 │  POST /chat    │  人格 + LivingMemory + 历史   │
-│ Rust 原生 HTTP 层      │ ◄───────────── │  on_llm_request 注入格式要求  │
-│ 主动对话 / 待机演出    │  SSE 流式回包  │ desktop_pet 插件 /pet/* 路由  │
-└───────────────────────┘                └──────────────────────────────┘
-```
+<!-- 演示截图：docs/assets/pet-demo.png（模型 + 气泡 + 输入框同框） -->
+![演示](docs/assets/pet-demo.png)
 
-桌宠作为 webchat 会话（`webchat!desktop_pet!desktop_pet`）走 AstrBot open API `/api/v1/chat`，自动获得**会话级人格**、**LivingMemory 记忆召回/反思**、平台历史与日志——人格/记忆/历史均在 AstrBot 侧管理，壳端不存历史。插件仅负责格式注入、TTS 代理与控制页。
+## 特性
 
-## 一、安装 AstrBot 插件
+- **Live2D 桌面立绘**：透明无边框置顶小窗，情绪表情、戳一戳互动、视线跟随、随机待机小动作、长待机演出
+- **完整聊天能力**：走 AstrBot webchat 管道，会话级人格、LivingMemory 记忆召回、平台历史与日志自动继承
+- **打字机气泡 + 输入框**：双击立绘开聊，回复带情绪标签自动切表情
+- **日语配音（可选）**：Style-Bert-VITS2 合成，逐句播放 + 口型同步；QQ 侧 bot 回复也能附带配音
+- **主动搭话**：深夜催睡、回来问候、久坐提醒；桌面感知可看着你的屏幕内容自然搭话（可配禁止抓取名单）
+- **WebUI 控制页**：服务侧配置全部图形化，保存即生效，无需重启
 
-方式 A（推荐）：AstrBot WebUI → 插件 → 安装插件 → 填本仓库地址。
+## 快速开始
 
-方式 B（手动）：把仓库根目录的 `main.py`、`metadata.yaml`、`_conf_schema.json`、`pages/` 拷到 `AstrBot/data/plugins/astrbot_plugin_desktop_pet/`，重启 AstrBot。
+前提：已部署 AstrBot v4 并能打开 WebUI（默认 `http://localhost:6185`）。部署见 [AstrBot 官方文档](https://docs.astrbot.app/)。
 
-> 本插件用到的 webchat 平台是 AstrBot 内置无条件启动的，无需在「平台」配置里添加。
+### 1. 安装插件
 
-## 二、创建 API Key
+WebUI → 插件 → 安装插件 → 填本仓库地址 `https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet`。
 
-桌宠壳经 AstrBot open API 通信，需要带 `plugin` + `chat` scope 的 API Key 鉴权：
+> 插件用到的 webchat 平台是 AstrBot 内置的，无需在「平台」配置里添加。
 
-- WebUI → 设置 → API Key → 新建（勾选 plugin、chat scope）。
+### 2. 创建 API Key
 
-请求时通过 `X-API-Key: <key>` 或 `Authorization: ApiKey <key>` 或 `?api_key=` 传递。**注意：`Bearer` 前缀会被当作 dashboard JWT，不会按 API Key 处理。**
+WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个 scope，复制保存。
 
-## 三、配置入口：WebUI 控制页（推荐）
+### 3. 获取桌宠壳
 
-插件自带 WebUI 控制页，是配置的**主入口**。进入方式：WebUI → 插件 → 找到「astrbot_plugin_desktop_pet」→ 点详情/控制页。控制页包含：
+到 [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) 下载 Windows 版（NSIS 安装包，或便携 zip 解压即用）。
 
-- **状态区**：SBV2 连通性/延迟/显存、桌宠会话 ID、当前主人身份、QQ 配音开关、默认人格。
-- **主动对话 / 桌面感知动态**卡片：桌宠壳 60s 心跳上报（在线/过期）、当前生效配置（开关/间隔/视觉模型/禁止抓取名单）、最近一次感知结果（已发言/略过/拦截/失败原因）。
-- **主人身份**卡片：主人昵称、主人 QQ 号（桌宠会话与 QQ 中该账号消息会被识别为同一位主人）。
-- **QQ 日语配音**卡片：开关（开启后 bot 在全部 QQ 群聊/私聊回复附带一条日语配音语音，文字仍为中文；SBV2 离线自动降级为纯文字）。
-- **主动对话 / 桌面感知配置**卡片：主动对话总开关、桌面感知开关、观察间隔（10/15/30/60 分钟）、视觉模型（下拉建议已配置的 provider，标注是否支持图片；留空跟随会话默认模型；不存在的 ID 会拒存）、禁止抓取进程名单（逗号分隔；名单内进程在前台时不截图）。壳端远程拉取，约 2 分钟内生效。
-- **TTS 语音配置**卡片：启用开关、SBV2 服务地址、模型/说话人/风格（下拉实时拉 SBV2 `/models/info`）、语速滑块。
-- **试听**区：用当前参数即时合成播放，不保存配置。
+> 首次运行若出现 SmartScreen「Windows 已保护你的电脑」：exe 未购买代码签名所致，点「仍要运行」即可。想自己构建见下文[从源码构建](#从源码构建)。
 
-控制页保存即时生效，无需重启。服务侧配置统一在控制页编辑；插件配置 schema（`_conf_schema.json`）中与控制页重叠的键已隐藏，仅保留 `pet_session_id`（该项为内部标识，正常情况下无需修改）。
+### 4. 首次配置
 
-### 为桌宠会话选人格
+首次启动桌宠会提示你配置：**右键立绘 → 设置**，填 AstrBot 地址（`http://localhost:6185` 即可，自动补全路径）和上一步的 API Key，点「测试连接」——plugin / chat / file 三项全绿即完成。
 
-桌宠会话的人格在 **WebUI 聊天页**（地址栏访问 `http://<astrbot-host>:6185/chat`，该页不在左侧导航菜单，需直接输 URL）里设置：左侧会话列表选 `desktop_pet` → 在该会话设置里选人格。注意：只有桌宠发过消息、AstrBot 产生 conversation 记录后，`desktop_pet` 才会出现在会话列表里。
+双击立绘打开输入框，开始聊天吧。
 
-## 四、接口说明
+### 5.（可选）给桌宠选人格
 
-### AstrBot open API（桌宠对话主通道）
+地址栏访问 `http://localhost:6185/chat`（该页不在左侧导航，需直输 URL）：左侧会话列表选 `desktop_pet` → 会话设置里选人格。桌宠先发过消息后该会话才会出现在列表里。
 
-`POST /api/v1/chat` —— 桌宠经此走 webchat 管道，享有 AstrBot 全部对话能力。SSE 帧序列：`session_id` → `user_message_saved` → `run_started` → `plain`×N → `agent_stats` → **`complete`（全文）** → `message_saved` → `end`。壳端用 `complete` 帧本地解析情绪标签与日语配音稿。
+服务侧进阶配置（TTS、主动对话、桌面感知、主人身份、QQ 配音）都在 **WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页**，保存即生效。
 
-### 插件自有路由（挂在 dashboard 插件扩展路径下，需带 plugin scope 的 API Key）
+## 进阶玩法
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET  | `/api/v1/plugins/extensions/desktop_pet/pet/health` | 探活，返回插件、默认模型可用性、情绪列表、TTS/QQ 配音开关、会话 ID |
-| POST | `/api/v1/plugins/extensions/desktop_pet/pet/tts` | 日语 TTS 合成：`{"text":"..."}` → `{"audio":"<base64 wav>","format":"wav"}`，壳端按句调用 |
-| GET  | `/api/v1/plugins/extensions/desktop_pet/pet/personas` | 列出 AstrBot 人格（供桌宠选用参考） |
-| GET  | `/api/v1/plugins/extensions/desktop_pet/pet/scene_config` | 桌面感知配置下发：`{"provider":"...","blocklist":[...]}`，壳端 120s 缓存拉取 |
-| POST | `/api/v1/plugins/extensions/desktop_pet/pet/status_report` | 壳端状态上报（60s 心跳 + 触发后防抖），插件内存暂存供控制页监控 |
-| *    | `/api/v1/plugins/extensions/astrbot_plugin_desktop_pet/page/*` | WebUI 控制页后端（status / sbv2_models / tts_config / master_config / scene_config / tts_test） |
+### TTS 日语配音（可选）
 
-> 控制页 API 路由前缀必须是**插件全名**（`astrbot_plugin_desktop_pet/page/...`），bridge 按插件名转发；用 `desktop_pet/page/...` 会报「未找到该路由」。
+桌宠回复附带日语配音需要自行部署 [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) 并准备一个声线模型：
 
-## 五、运行桌宠壳（pet_shell）
+1. 部署 SBV2，记下服务地址（AstrBot 在 Docker、SBV2 在 WSL 宿主时通常为 `http://172.18.0.1:5000`）。
+2. 插件控制页「TTS 语音配置」填地址，下拉选择模型/说话人/风格，开启开关，保存。
+3. 桌宠壳设置面板打开「语音（日语配音）」。
 
-前提：Rust 工具链（rustup stable）+ MSVC Build Tools（VS 2022）+ Node.js（v20+）。
+之后回复变为「中文气泡 + 日语逐句配音 + 口型同步」。开启控制页的「QQ 日语配音」后，bot 在 QQ 群聊/私聊的回复也会附带一条配音语音（SBV2 离线时自动降级为纯文字）。
+
+> `2.7.0-JP-Extra` 系模型只支持日语；需要中文配音请另装标准三语模型。
+
+### 主动对话与桌面感知
+
+在插件控制页配置，壳端约 2 分钟内拉取生效：
+
+- **主动对话**：深夜催睡（23-02 点连续活动）、回来问候（离开 30min 后回归）、久坐提醒（连续活动 2h）。全局节流 45 分钟，全屏/输入中/离开状态不打扰。
+- **桌面感知**：按观察间隔抓取**前台窗口**画面发给视觉模型，看到值得评论的内容（游戏进展、有趣页面）自然搭话，没什么可说的就安静。**截图会发送给你的 LLM 提供商**；「禁止抓取名单」内进程（默认含微信/QQ/钉钉/Office 等）在前台时直接跳过、不截图。独占全屏游戏抓不到（无边框窗口化即可）。
+
+### 自定义 Live2D 模型
+
+任意 Cubism 3/4 模型放入 `pet_shell/src/assets/live2d/chino/` 并把入口命名为 `chino.model3.json`（重新构建后生效），即可替换默认模型。**模型文件名与 model3.json 内部引用需为全 ASCII**。情绪→表情映射在 `pet_shell/src/app.js` 的 `EMOTION_EXPRESSIONS` 中按你的模型实际表情名修改。
+
+仓库内置官方免费示例模型**桃濑日和**（许可见模型目录 `ReadMe.txt` 与[官方许可页](https://www.live2d.com/zh-CHS/download/sample-data/)）。自定义模型涉及版权请勿入库分发（该目录已 gitignore）。
+
+## 操作一览
+
+| 操作 | 效果 |
+| --- | --- |
+| 单击立绘 | 戳一戳，随机动作/表情 |
+| 双击立绘 | 开合输入框，回车发送 |
+| 拖动立绘 | 移动窗口 |
+| 拖动右下角半透明手柄 | 调整窗口与模型大小（自动记忆） |
+| 右键 | 聊天 / 点击穿透 / 设置 / 退出 |
+| `Ctrl+Shift+P` | 切换点击穿透（穿透后只能用快捷键或托盘切回） |
+| 气泡头部粉点 / 点击气泡 | 收起气泡（回复结束 15s 自动收起） |
+| 托盘图标 | 切换穿透 / 退出 |
+
+## 从源码构建
+
+前提：Node.js v20+、Rust stable（rustup）、VS 2022 Build Tools、Python 3。
 
 ```bash
-cd pet_shell
+git clone https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet
+cd astrbot_plugin_desktop_pet/pet_shell
 npm install
-npm run dev        # 开发调试（tauri dev，热重载前端）
-npm run build      # 产出独立 exe（src-tauri/target/release/）
+npm run dev     # 首次自动下载 Live2D 渲染库（也可单独跑 npm run setup）
+npm run build   # 产出独立 exe：src-tauri/target/release/pet_shell.exe
 ```
 
-首次运行：右键桌宠 →「设置」，填入 AstrBot 地址（默认 `http://localhost:6185/api/v1/plugins/extensions`）和上一步的 API Key，点「测试连接」。也可以在 `pet_shell/src/` 下放一个 `config.local.json` 预置配置（已 gitignore，不会提交）：
+> Live2D 渲染库（pixi / pixi-live2d-display / Live2D Cubism Core）因许可原因不入库，由 `tools/fetch_vendor.py` 按 SHA256 校验下载。下载失败请检查网络连接后重跑 `npm run setup`。
+> 注意：`npm run dev` 产出的 debug exe 脱离 CLI 直接启动会白屏，独立运行请用 `npm run build` 的产物。
+
+可在 `pet_shell/src/` 放 `config.local.json` 预置配置（已 gitignore）：
 
 ```json
 {
-  "base_url": "http://localhost:6185/api/v1/plugins/extensions",
-  "api_key": "你的 API Key",
-  "proactive": {
-    "enabled": true,
-    "globalCooldownMin": 45,
-    "rules": {
-      "night_owl":     { "enabled": true, "startHour": 23, "endHour": 2,  "activeHours": 1,   "cooldownHours": 2 },
-      "welcome_back":  { "enabled": true, "awayMinutes": 30,                "cooldownHours": 1 },
-      "sedentary":     { "enabled": true, "activeHours": 2,                 "cooldownHours": 2 }
-    },
-    "scene": { "enabled": false, "intervalMin": 30, "maxIdleMin": 10 }
-  }
+  "base_url": "http://localhost:6185",
+  "api_key": "你的 API Key"
 }
 ```
 
-`proactive` 节可省略（用内置默认值，即上例）。主动对话规则阈值/冷却与 `scene.maxIdleMin` 在此文件调整；**开关/观察间隔/视觉模型/禁止抓取名单在插件控制页配置**（壳端远程拉取，插件不可达时才回退此文件的 `scene.provider/blocklist` 或内置默认）。
+## 常见问题
 
-设置面板内还有：
-- **语音（日语配音）**：开关桌宠回复的日语语音播放（仅控制壳端播放，服务端仍按配置合成）。
-- **测试连接**：分项自检——plugin/chat/file 三项 API Key scope 与默认模型可用性，缺哪项会直接标注（桌面感知需要 `file` scope）。
-- **主动对话与桌面感知**：均不在壳端设置面板，统一在插件控制页（开关/间隔/模型/名单）。桌面感知开启后按「观察间隔」抓取**前台窗口**画面（Windows Graphics Capture 进程级抓取，只含目标窗口内容，遮挡窗口也能抓），经 open API `/api/v1/file` 上传后随情境消息发给视觉模型识图：看到值得评论的内容（游戏进展、文档、有趣页面）就自然搭话，没什么值得说的模型回【略过】则静默。**截图会发送给云端 LLM 提供商**。名单内进程在前台时直接跳过、不截图——默认含微信（`weixin`/`wechat` 等）、QQ/TIM、企业微信、钉钉、腾讯会议、Word/Excel/PowerPoint。视觉模型需支持图片输入；留空则跟随会话默认模型（默认模型无视觉时感知不可用）。已知限制：独占全屏游戏绕过 DWM 抓不到（无边框窗口化即可）、窗口最小化抓不到、DRM 内容黑帧（自动跳过）。
+- **桌宠无回复**：设置面板点「测试连接」看分项结果；确认 AstrBot 日志有 `[desktop_pet] web api registered`；API Key 需 plugin+chat scope（桌面感知还要 file scope）。
+- **Live2D 不显示（源码运行）**：确认 `src/vendor/` 下三个 js 已下载（`npm run setup`）；模型路径含非 ASCII 字符或模型非 Cubism 3/4 也会加载失败。
+- **没有语音**：控制页 TTS 开关、SBV2 状态「可达」、模型/说话人已选，壳端设置「语音」开关——三处都要开。
+- **回复不切表情**：模型没按格式输出情绪标签时用「平静」兜底，属正常；可在人格 prompt 里强化格式要求。
+- **远端 AstrBot**：设置里把地址改成对应主机即可。API Key 即鉴权，请勿把 6185 端口暴露到公网。
 
-## 六、操作
+## 开发文档
 
-- **单击立绘**：戳一戳，随机动作/表情反馈。
-- **双击立绘**：开合输入框，回车发送。
-- **对话气泡**：回复结束 15 秒后自动收起；头部左侧粉色小圆点可随时切换显示/隐藏；点击气泡也可收起。
-- **拖动立绘**：移动窗口位置。
-- **拖动右下角半透明手柄**：调整窗口和模型大小（自动记忆，重启恢复）。
-- **右键**：聊天 / 点击穿透 / 设置 / 退出。
-- **Ctrl+Shift+P**：切换点击穿透（穿透开启后窗口不接收任何鼠标事件，只能用快捷键或托盘菜单切回）。
-- **托盘图标**：切换穿透 / 退出。
-
-## 七、立绘与 Live2D
-
-### 内置默认模型：桃濑日和（Momose Hiyori）
-
-仓库内置 Live2D 官方免费示例模型**桃濑日和 FREE 版**（`pet_shell/src/assets/live2d/hiyori/`，插画：Kani Biimu / 模型：Live2D），开箱即有完整的 Live2D 桌宠（待机动作组、眨眼、物理、口型同步）。
-
-- **许可**：Live2D Cubism 示例模型许可——普通用户及小规模企业可商用（中/大规模企业仅限非公开内部试用），详见模型目录内 `ReadMe.txt` 与[官方许可页](https://www.live2d.com/zh-CHS/download/sample-data/)。
-- **能力差异**：该模型无表情文件（exp3.json），情绪反馈以气泡/语音呈现；戳一戳与随机待机使用其自带动作组（Tap/Flick 等）；长待机演出（coin_sway）与程序化表情为智乃档案专属，在日和上自动停用。
-- **加载顺序**：`config.local.json` 的 `live2d.model_url`（可选显式指定）→ `assets/live2d/chino/chino.model3.json`（本地自定义位，gitignore）→ 内置日和 → 静态兜底。模型能力按 `src/app.js` 的 `MODEL_PROFILES` 档案分流。
-
-### 自定义模型
-
-任意 Cubism 3/4 模型放到 `src/assets/live2d/chino/` 并把入口命名为 `chino.model3.json`（或改用 `live2d.model_url` 指向你的入口），即可覆盖默认模型——**模型文件名与 model3.json 内部引用需为全 ASCII**（Tauri 资产协议对非 ASCII 路径支持不佳）。模型与第三方渲染库涉及版权与 Live2D SDK 许可，自定义模型不入库（已 gitignore）。
-
-- **渲染库自备**（下载到 `src/vendor/`）：`pixi.js@6.5.x` 的 `pixi.min.js`、`pixi-live2d-display@0.4.0` 的 `cubism4.min.js`、Live2D 官方的 `live2dcubismcore.min.js`。
-- **情绪映射**：`src/app.js` 的 `EMOTION_EXPRESSIONS` 把 8 种情绪映射到模型表情（expression 名称，智乃档案），`null` 表示恢复默认表情；按你的模型实际表情名修改即可。
-- **程序化动作**：`pet_shell/tools/gen_motions.py` 程序化生成 motion3.json（点头/摇头/歪头/摇摆/待机增强 `idle_sway`/长待机演出 `coin_sway` 等）并自动注册进 model3.json（智乃档案专用）；改 `AMPLITUDES` 常量即可调整幅度，重跑脚本即重新生成。
-- **灵动待机系统**（`src/app.js`）：
-  - 视线跟随鼠标（3 秒看门狗缓动回正；点击穿透模式下自动失效）；
-  - 随机待机调度：每 25~60 秒随机触发小动作、短暂表情或视线游移；对话与演出期间自动暂停；
-  - 长待机演出 `coin_sway`（智乃档案）：45 秒的手部形态保持 + 头身慢摇，FORCE 优先级进出，演出中发消息立即退出。
-- **调试**：`pet_shell/src/lab/index.html` 是动作实验室（`python -m http.server 8765` 后开 `http://localhost:8765/lab/`），按钮即时播放任意动作/表情调参；`probe.html` 是运行时参数记录探针。
-- 注意：`model.expression()` 不传参会**随机**应用表情，恢复默认必须用 `expressionManager.resetExpression()`。
-
-### 静态立绘（兜底）
-
-Live2D 加载失败时回退 `img#avatar` 静态立绘（按情绪切换 `assets/<emotion>.png`）。仓库不再内置占位图，兜底状态下立绘区域为透明（不影响功能）；如需静态兜底图，用 `pet_shell/tools/gen_assets.py` 生成或自行放置同名 PNG。
-
-## 八、TTS 语音（可选）
-
-桌宠回复附带日语配音需要 **Style-Bert-VITS2**（自备部署，本项目不提供模型与服务）：
-
-1. 自行部署 SBV2（litagin02 仓库），准备一个日语声线模型。
-2. 在插件控制页「TTS 语音配置」填 SBV2 地址、选择模型/说话人/风格，开启开关。
-3. 桌宠回复格式变为「【情绪】中文正文【JP】日语配音稿」：中文进气泡，日语分句逐句合成顺序播放（壳端 AudioContext 队列 + 口型同步）。
-
-AstrBot 与 SBV2 的网络：若 AstrBot 跑在 Docker、SBV2 跑在 WSL 宿主，插件侧填 `http://172.18.0.1:5000`（docker 网桥网关 IP）；docker 网络重建需改该地址。QQ 日语配音同走该 SBV2。
-
-> ATRI 等 `2.7.0-JP-Extra` 模型**只支持 language=JP**，中文合成会 500；要中文语音需另装非 JP-Extra 的标准三语模型。
-
-## 九、常见问题
-
-- **桌宠无回复**：先在设置面板点「测试连接」；再确认 AstrBot 日志里插件已加载（`[desktop_pet] web api registered`）；确认 API Key 带 plugin+chat scope 且用 `X-API-Key` / `Authorization: ApiKey` 传递（不要用 `Bearer`）。
-- **回复没有切换表情**：模型未按格式输出情绪标签时会用「平静」兜底，属正常现象；可在人格 prompt 里强化格式要求。插件已在用户消息末尾补格式提醒对抗长人格稀释。
-- **没有语音**：确认控制页 TTS 开关已开、SBV2 状态区显示「可达」、模型/说话人/风格已选；壳端设置面板「语音」开关也要开。
-- **Live2D 不显示**：打开 devtools（debug 构建自动弹出）看控制台；常见原因是模型路径含非 ASCII 字符、vendor 库缺失，或模型不是 Cubism 3/4 格式。内嵌资产模式下 CSP 要求 `'unsafe-eval'`（已配置），否则 PIXI 初始化失败回退静态立绘。
-- **打包的 exe 白屏「127.0.0.1 拒绝连接」**：经 `tauri dev` 产出的 debug exe 会烘焙 dev server 地址（`127.0.0.1:1430`），脱离 CLI 直接启动时白屏。**独立运行的 exe 必须用 `cargo build --release` 或 `npm run build` 产出**（走内嵌资产 `tauri.localhost`）。排查技巧：设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动，访问 `http://localhost:9222/json` 看 WebView 实际加载的 URL。
-- **远端 AstrBot**：把桌宠设置里的地址改成对应主机即可（注意 6185 端口的访问控制，API Key 即鉴权，请勿暴露到公网）。
-
-## 十、工具脚本
-
-`pet_shell/tools/`：
-
-- `gen_motions.py`：生成/更新程序化动作 motion3.json 并注册进 model3.json。
-- `gen_assets.py`：生成 8 张占位情绪 PNG 与图标。
-- `start_all.ps1` / `stop_all.ps1`：一键启停整套服务（WSL 服务 + AstrBot 容器 + 桌宠 exe）。**PowerShell 5.1 需以 UTF-8 BOM 保存，否则中文解析报错。**
-- `start_all.vbs` / `stop_all.vbs`：wscript 隐藏调起对应 ps1，全程无控制台窗口闪烁，日常双击用这两个。
+架构、接口一览、SSE 帧序、动作生成、调试技巧、发布流程见 [docs/dev.md](docs/dev.md)。
 
 ## 许可
 
-MIT
+代码 MIT。内置模型桃濑日和为 Live2D 官方免费示例数据，按其[许可条款](https://www.live2d.com/zh-CHS/download/sample-data/)随仓库分发。渲染库（pixi.js / pixi-live2d-display / Live2D Cubism Core）按各自许可由构建脚本下载，不入库。

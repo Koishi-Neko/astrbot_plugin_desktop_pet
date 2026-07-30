@@ -1,5 +1,5 @@
 name: astrbot_plugin_desktop_pet
-desc: 为自研桌面桌宠壳提供 SSE 对话接口（人设 + 情绪标签 + 历史上下文）
-version: 0.1.0
+desc: Windows 桌面 Live2D 桌宠：webchat 人格/记忆 + 情绪表情 + 日语配音（SBV2）+ 主动搭话与桌面感知，配套 Tauri 桌宠壳
+version: 0.2.0
 author: Koishi-Neko
 repo: https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet
