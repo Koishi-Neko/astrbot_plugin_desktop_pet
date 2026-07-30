@@ -8,13 +8,13 @@
 桌宠壳 (Windows)                          AstrBot
 ┌───────────────────────┐  open API SSE  ┌──────────────────────────────┐
 │ Tauri 透明置顶窗口     │ ─────────────► │ /api/v1/chat (webchat 管道)   │
-│ Live2D / 气泡 / 输入框 │  POST /chat    │  人格 + LivingMemory + 历史   │
+│ Live2D / 气泡 / 输入框 │  POST /chat    │  人格 + 历史 (+可选记忆插件)  │
 │ Rust 原生 HTTP 层      │ ◄───────────── │  on_llm_request 注入格式要求  │
 │ 主动对话 / 待机演出    │  SSE 流式回包  │ desktop_pet 插件 /pet/* 路由  │
 └───────────────────────┘                └──────────────────────────────┘
 ```
 
-桌宠作为 webchat 会话（`webchat!desktop_pet!desktop_pet`）走 AstrBot open API `/api/v1/chat`，自动获得**会话级人格**、**LivingMemory 记忆召回/反思**、平台历史与日志——人格/记忆/历史均在 AstrBot 侧管理，壳端不存历史。插件仅负责格式注入、TTS 代理与控制页。
+桌宠作为 webchat 会话（`webchat!desktop_pet!desktop_pet`）走 AstrBot open API `/api/v1/chat`，自动获得**会话级人格**、平台历史与日志——人格/历史均在 AstrBot 侧管理，壳端不存历史。**记忆召回/反思不是本插件的功能**：安装记忆类插件（如 LivingMemory）时由其在管道中自动提供，不装不影响桌宠任何功能。插件仅负责格式注入、TTS 代理与控制页。
 
 > WebView2 有 CORS 限制，前端不直接 fetch 插件接口：所有 HTTP 走 Rust reqwest 原生层（`pet_*` Tauri 命令），SSE 经 Tauri event 推回前端。
 
@@ -53,7 +53,7 @@
 
 ## 插件（main.py）要点
 
-- 钩子：`on_llm_request`（**priority=-10**，须后于 LivingMemory 的记忆召回注入执行）对桌宠会话注入【情绪】中文【JP】日语格式要求 + 主人身份改写；`on_decorating_result` 把 QQ 回复拆成 `Plain(中文)+Record(日语配音)`。
+- 钩子：`on_llm_request`（**priority=-10**，须后于记忆类插件等注入型插件执行，如 LivingMemory 的记忆召回注入）对桌宠会话注入【情绪】中文【JP】日语格式要求 + 主人身份改写；`on_decorating_result` 把 QQ 回复拆成 `Plain(中文)+Record(日语配音)`。
 - 身份改写：`_rewrite_pet_identity()` 改写当前请求 `extra_user_content_parts` + 历史 `contexts` + `req.prompt`/`system_prompt`（`provider_settings.identifier` 会把 `User ID: desktop_pet` 追加进每条用户消息，不改写模型会把用户叫成 desktop_pet）。
 - 长人格 prompt 会稀释 system 侧格式要求 → 在**用户消息末尾**补格式提醒（桌宠和 QQ 两侧都需要）。
 - 配置持久化：写回 `data/config/astrbot_plugin_desktop_pet_config.json` 即时生效；schema 中与控制页重叠的键全部 `invisible: true`，仅 `pet_session_id` 可见（内部常量，不应让用户改）。

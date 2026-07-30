@@ -481,8 +481,8 @@ class DesktopPetBridge(Star):
 
     # ---------- 管道模式：给桌宠 webchat 会话追加输出格式要求 ----------
 
-    # priority=-10：必须后于 LivingMemory（默认 0）的记忆召回注入执行，
-    # 否则召回内容（可能含旧的 desktop_pet 身份文本）绕过身份改写
+    # priority=-10：必须后于记忆类插件（如 LivingMemory，默认 0）等注入型插件执行，
+    # 否则其注入内容（可能含旧的 desktop_pet 身份文本）绕过身份改写
     @filter.on_llm_request(priority=-10)
     async def inject_pet_format(self, event: AstrMessageEvent, req: ProviderRequest):
         umo = event.unified_msg_origin or ""
@@ -609,7 +609,7 @@ class DesktopPetBridge(Star):
                 new = fix(t)
                 if new != t:
                     part.text = new
-        # LivingMemory 等按注入模式也可能落进 prompt/system_prompt，一并清洗
+        # 记忆类插件（如 LivingMemory）等按注入模式也可能落进 prompt/system_prompt，一并清洗
         if isinstance(getattr(req, "prompt", None), str):
             req.prompt = fix(req.prompt)
         if isinstance(getattr(req, "system_prompt", None), str):

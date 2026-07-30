@@ -10,7 +10,7 @@ Turn [AstrBot](https://github.com/AstrBotDevs/AstrBot) into the brain of a Windo
 ## Features
 
 - **Live2D desktop companion**: transparent, borderless, always-on-top window with emotion expressions, poke reactions, eye tracking, random idle motions and a long-idle performance
-- **Full chat capability**: rides the AstrBot webchat pipeline — per-session persona, LivingMemory recall, platform history and logs are inherited automatically
+- **Full chat capability**: rides the AstrBot webchat pipeline — per-session persona, platform history and logs are inherited automatically; with a memory plugin installed (e.g. LivingMemory) the pet also gains memory recall/reflection, but works fully without one
 - **Typewriter bubble + input bar**: double-click the model to chat; emotion tags in replies switch expressions
 - **Japanese voice dubbing (optional)**: Style-Bert-VITS2 synthesis, sentence-by-sentence playback with mouth sync; QQ replies can carry dubbing too
 - **Proactive chatter**: late-night reminders, welcome-back greetings, sedentary alerts; optional scene awareness comments on what you're doing (with a capture blocklist)
