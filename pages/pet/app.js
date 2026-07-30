@@ -111,6 +111,57 @@ async function saveMasterConfig() {
   }
 }
 
+// ---------- 桌宠人格 ----------
+
+async function loadPersonaConfig() {
+  const sel = $("pet-persona");
+  const hint = $("persona-hint");
+  const btn = $("btn-save-persona");
+  try {
+    const cfg = await bridge.apiGet("page/persona_config");
+    sel.innerHTML = "";
+    for (const name of cfg.personas || []) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    if (!cfg.conversation_exists) {
+      hint.textContent = "桌宠会话尚不存在：先让桌宠发一条消息，再来设置人格。";
+      btn.disabled = true;
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    btn.disabled = false;
+    const cur = cfg.current_persona_id;
+    if (cur) {
+      sel.value = cur;
+      hint.textContent = `当前人格：${cur}`;
+    } else {
+      sel.value = cfg.default_persona || "default";
+      hint.textContent = `当前未显式设置，跟随默认人格：${cfg.default_persona || "default"}`;
+    }
+  } catch (e) {
+    hint.textContent = "人格配置读取失败：" + e.message;
+  }
+}
+
+async function savePersona() {
+  $("btn-save-persona").disabled = true;
+  $("persona-save-msg").textContent = "保存中…";
+  try {
+    await bridge.apiPost("page/persona_config", { persona_id: $("pet-persona").value });
+    $("persona-save-msg").textContent = "已保存，下条消息起生效。";
+    loadPersonaConfig();
+  } catch (e) {
+    $("persona-save-msg").textContent = "保存失败：" + e.message;
+  } finally {
+    $("btn-save-persona").disabled = false;
+    setTimeout(() => ($("persona-save-msg").textContent = ""), 4000);
+  }
+}
+
 // ---------- TTS 配置区 ----------
 
 function fillSelect(sel, entries, keepValue) {
@@ -259,6 +310,7 @@ await bridge.ready();
 $("btn-refresh").addEventListener("click", refreshStatus);
 $("btn-save-master").addEventListener("click", saveMasterConfig);
 $("btn-save-dub").addEventListener("click", saveJpDub);
+$("btn-save-persona").addEventListener("click", savePersona);
 $("btn-save-scene").addEventListener("click", saveSceneConfig);
 $("btn-save").addEventListener("click", saveConfig);
 $("btn-test").addEventListener("click", testTts);
@@ -274,6 +326,6 @@ $("tts-length").addEventListener("input", () => {
 });
 
 await loadConfig();
-await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig()]);
+await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadPersonaConfig()]);
 // 配置里的 style/speaker 选中值在模型列表加载后应用一次
 onModelChange();

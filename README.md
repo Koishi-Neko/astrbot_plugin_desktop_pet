@@ -44,7 +44,7 @@ WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个
 
 ### 5.（可选）给桌宠选人格
 
-地址栏访问 `http://localhost:6185/chat`（该页不在左侧导航，需直输 URL）：左侧会话列表选 `desktop_pet` → 会话设置里选人格。桌宠先发过消息后该会话才会出现在列表里。
+**WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页 → 桌宠人格**，下拉选择保存即可（不设置则跟随 AstrBot 默认人格）。桌宠尚未发言时会话不存在，先发一条消息再来设置。
 
 服务侧进阶配置（TTS、主动对话、桌面感知、主人身份、QQ 配音）都在 **WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页**，保存即生效。
 

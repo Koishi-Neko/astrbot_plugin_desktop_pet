@@ -47,7 +47,7 @@
 | GET  | `/api/v1/plugins/extensions/desktop_pet/pet/personas` | 列出 AstrBot 人格（供桌宠选用参考） |
 | GET  | `/api/v1/plugins/extensions/desktop_pet/pet/scene_config` | 桌面感知配置下发：`{"provider":"...","blocklist":[...]}`，壳端 120s 缓存拉取 |
 | POST | `/api/v1/plugins/extensions/desktop_pet/pet/status_report` | 壳端状态上报（60s 心跳 + 触发后防抖），插件内存暂存供控制页监控 |
-| *    | `/api/v1/plugins/extensions/astrbot_plugin_desktop_pet/page/*` | WebUI 控制页后端（status / sbv2_models / tts_config / master_config / scene_config / tts_test） |
+| *    | `/api/v1/plugins/extensions/astrbot_plugin_desktop_pet/page/*` | WebUI 控制页后端（status / sbv2_models / tts_config / master_config / persona_config / scene_config / tts_test） |
 
 > 控制页 API 路由前缀必须是**插件全名**（`astrbot_plugin_desktop_pet/page/...`），bridge 按插件名转发；用 `desktop_pet/page/...` 会报「未找到该路由」。控制页加载在 Dashboard 登录态下（此时 API Key 401 属正常）。
 

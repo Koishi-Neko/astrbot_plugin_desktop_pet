@@ -44,7 +44,7 @@ Double-click the model to open the input bar and start chatting.
 
 ### 5. (Optional) Pick a persona for the pet
 
-Visit `http://localhost:6185/chat` directly in the address bar (this page is not in the sidebar): select the `desktop_pet` conversation → choose a persona in its settings. The conversation appears only after the pet has sent at least one message.
+**WebUI → Plugins → astrbot_plugin_desktop_pet → Control Page → Pet Persona** — pick one from the dropdown and save (otherwise the pet follows AstrBot's default persona). The conversation only exists after the pet has sent at least one message, so chat first, then set it.
 
 Advanced server-side settings (TTS, proactive chat, scene awareness, master identity, QQ dubbing) live in **WebUI → Plugins → astrbot_plugin_desktop_pet → Control Page**, applied on save.
 

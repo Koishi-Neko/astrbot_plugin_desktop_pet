@@ -165,6 +165,12 @@ class DesktopPetBridge(Star):
             "桌宠控制页：读写主人身份配置",
         )
         self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/persona_config",
+            self.page_persona_config,
+            ["GET", "POST"],
+            "桌宠控制页：读写桌宠会话人格",
+        )
+        self.context.register_web_api(
             "astrbot_plugin_desktop_pet/page/tts_test",
             self.page_tts_test,
             ["POST"],
@@ -403,6 +409,70 @@ class DesktopPetBridge(Star):
             updated[k] = v
         self._persist_config()
         return {"saved": True, "updated": updated}
+
+    # ---------- 桌宠会话人格（控制页直接设置，无需进隐藏 /chat 页） ----------
+
+    def _pet_umo(self) -> str:
+        sid = self._pet_session_id()
+        return f"webchat:FriendMessage:webchat!{sid}!{sid}"
+
+    async def _pet_conversation(self):
+        """返回 (conversation_id, Conversation) 或 (None, None)（桌宠尚未发言时无会话）。"""
+        try:
+            umo = self._pet_umo()
+            cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
+            if not cid:
+                return None, None
+            conv = await self.context.conversation_manager.get_conversation(umo, cid)
+            return cid, conv
+        except Exception as e:
+            logger.warning(f"[desktop_pet] get pet conversation failed: {e}")
+            return None, None
+
+    def _persona_names(self) -> list[str]:
+        mgr = self.context.persona_manager
+        names = []
+        try:
+            for p in mgr.personas_v3 or []:
+                name = p.get("name") if isinstance(p, dict) else getattr(p, "name", None)
+                if name:
+                    names.append(name)
+        except Exception as e:
+            logger.warning(f"[desktop_pet] list personas failed: {e}")
+        if "default" not in names:
+            names.insert(0, "default")
+        return names
+
+    async def page_persona_config(self):
+        mgr = self.context.persona_manager
+        cid, conv = await self._pet_conversation()
+        if request.method == "GET":
+            return {
+                "conversation_exists": conv is not None,
+                "current_persona_id": getattr(conv, "persona_id", None) if conv else None,
+                "default_persona": getattr(mgr, "default_persona", None),
+                "personas": self._persona_names(),
+            }
+        payload = await request.json(default={})
+        pid = str(payload.get("persona_id") or "").strip()
+        if not pid:
+            return error_response("persona_id is required", status_code=400)
+        known = set(self._persona_names())
+        if known and pid not in known:
+            return error_response(f"人格「{pid}」不存在", status_code=400)
+        if not cid:
+            return error_response(
+                "桌宠会话尚不存在：请先让桌宠发一条消息，再来设置人格", status_code=400
+            )
+        try:
+            await self.context.conversation_manager.update_conversation(
+                self._pet_umo(), conversation_id=cid, persona_id=pid
+            )
+        except Exception as e:
+            logger.warning(f"[desktop_pet] set pet persona failed: {e}")
+            return error_response(f"设置失败: {e}", status_code=500)
+        logger.info(f"[desktop_pet] pet persona set to {pid} (cid={cid})")
+        return {"saved": True, "current_persona_id": pid}
 
     async def page_tts_test(self):
         payload = await request.json(default={})

@@ -36,6 +36,20 @@
       </section>
 
       <section class="card">
+        <div class="card-title">桌宠人格</div>
+        <div class="warn">直接给桌宠会话选择人格，无需打开隐藏的 /chat 页。桌宠尚未发言时会话不存在，需先发一条消息再来设置。</div>
+        <label class="row">
+          <span class="label">人格</span>
+          <select id="pet-persona"></select>
+        </label>
+        <div id="persona-hint" class="warn"></div>
+        <div class="row buttons">
+          <button id="btn-save-persona" class="btn primary">保存人格</button>
+          <span id="persona-save-msg" class="msg"></span>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-title">QQ 日语配音</div>
         <div class="warn">开启后，bot 在全部 QQ 群聊/私聊的回复附带一条日语配音语音（文字仍为中文）。语音服务离线时自动降级为纯文字。</div>
         <label class="row checkbox-row">
