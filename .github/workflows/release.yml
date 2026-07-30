@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag（如 v0.2.0，需已存在或由本工作流创建）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pet_shell/src-tauri
+
+      - name: Install npm deps
+        working-directory: pet_shell
+        run: npm ci
+
+      - name: Fetch Live2D vendor libs (pixi / cubism4 / cubismcore)
+        working-directory: pet_shell
+        run: python tools/fetch_vendor.py
+
+      # tauri-action 默认创建 draft release，网页端检查无误后手动 Publish
+      - name: Build Tauri app & create release (NSIS installer)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: pet_shell
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "AstrBotPet ${{ inputs.tag || github.ref_name }}"
+          args: --bundles nsis
+
+      - name: Zip portable exe
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          Compress-Archive -Path "pet_shell/src-tauri/target/release/pet_shell.exe" `
+            -DestinationPath "AstrBotPet_${tag}_windows-x64-portable.zip" -Force
+
+      - name: Upload portable zip to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          gh release upload $tag "AstrBotPet_${tag}_windows-x64-portable.zip" --clobber
