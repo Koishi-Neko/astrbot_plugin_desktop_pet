@@ -1,7 +1,7 @@
-"""生成桌宠占位立绘（8 种情绪）+ 托盘/应用图标。
+"""生成桌宠占位立绘（8 种情绪）。
 
 用法：python tools/gen_assets.py
-输出：pet_shell/src/assets/<英文名>.png 与 pet_shell/src-tauri/icons/icon.png
+输出：pet_shell/src/assets/<英文名>.png
 文件名使用英文（Tauri 资产协议对非 ASCII 文件名支持不佳），
 情绪中文名 -> 文件名的映射见 EMOTION_FILES，与前端 app.js 中的映射保持一致。
 占位图为简单卡通脸，正式使用时可替换 assets/ 下的同名文件。
@@ -120,17 +120,13 @@ def draw_face(emotion, color, eyes, mouth):
 
 def main():
     os.makedirs(ASSETS, exist_ok=True)
-    os.makedirs(ICONS, exist_ok=True)
     for emotion, (color, eyes, mouth) in EMOTIONS.items():
         img = draw_face(emotion, color, eyes, mouth)
         out = os.path.join(ASSETS, f"{EMOTION_FILES[emotion]}.png")
         img.save(out)
         print("written:", out)
-
-    icon = draw_face("平静", EMOTIONS["平静"][0], "normal", "smile").resize((512, 512))
-    icon_path = os.path.join(ICONS, "icon.png")
-    icon.save(icon_path)
-    print("written:", icon_path)
+    # 注意：不再生成图标。src-tauri/icons/ 现为提比图标（2026-07-30 替换蓝色占位球），
+    # 重跑本脚本不会覆盖。
 
 
 if __name__ == "__main__":
