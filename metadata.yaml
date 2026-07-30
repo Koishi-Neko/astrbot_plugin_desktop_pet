@@ -1,5 +1,13 @@
 name: astrbot_plugin_desktop_pet
+display_name: 桌面桌宠
+short_desc: 把 AstrBot 变成 Windows 桌面 Live2D 桌宠
 desc: Windows 桌面 Live2D 桌宠：webchat 人格/记忆 + 情绪表情 + 日语配音（SBV2）+ 主动搭话与桌面感知，配套 Tauri 桌宠壳
 version: 0.2.0
 author: Koishi-Neko
 repo: https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet
+social_link: https://github.com/Koishi-Neko
+tags:
+  - 桌宠
+  - Live2D
+  - 桌面宠物
+  - TTS
