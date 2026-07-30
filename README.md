@@ -50,6 +50,9 @@ WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个
 
 ## 进阶玩法
 
+<!-- 控制页截图：docs/assets/control-page.png（控制页 + 桌宠同框） -->
+![WebUI 控制页与桌宠](docs/assets/control-page.png)
+
 ### TTS 日语配音（可选）
 
 桌宠回复附带日语配音需要自行部署 [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) 并准备一个声线模型：

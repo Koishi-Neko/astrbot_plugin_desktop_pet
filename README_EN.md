@@ -50,6 +50,9 @@ Advanced server-side settings (TTS, proactive chat, scene awareness, master iden
 
 ## Advanced
 
+<!-- Control page screenshot: docs/assets/control-page.png (control page + pet) -->
+![WebUI control page and the pet](docs/assets/control-page.png)
+
 ### TTS Japanese dubbing (optional)
 
 Voice replies require your own [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) deployment and a voice model:
