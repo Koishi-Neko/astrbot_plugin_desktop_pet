@@ -181,6 +181,76 @@ body {
   color: #d33;
 }
 
+/* 切换模型子菜单 */
+.menu-item.has-sub {
+  position: relative;
+}
+
+.submenu {
+  display: none;
+  position: absolute;
+  right: 100%;
+  top: -5px;
+  min-width: 110px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+}
+
+.menu-item.has-sub:hover .submenu {
+  display: block;
+}
+
+.submenu .menu-item.active {
+  font-weight: bold;
+  color: #d66;
+}
+
+/* 上传模型的卸载按钮 */
+.model-del {
+  float: right;
+  color: #bbb;
+  font-weight: bold;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.model-del:hover {
+  color: #d33;
+  background: #ffe3ef;
+}
+
+/* 设置面板分区线 */
+.settings-divider {
+  border-top: 1px solid #eee;
+  margin: 8px 0;
+}
+
+/* 窗口内确认框（原生 confirm 会被小窗裁剪，禁用） */
+#confirm-dialog {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 85%;
+  max-width: 240px;
+  background: rgba(255, 255, 255, 0.99);
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  padding: 14px;
+  z-index: 120;
+}
+
+#confirm-text {
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 12px;
+  word-break: break-all;
+}
+
 /* 设置面板 */
 #settings {
   position: absolute;

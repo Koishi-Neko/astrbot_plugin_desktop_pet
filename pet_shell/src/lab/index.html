@@ -43,8 +43,12 @@
   <script src="../vendor/pixi.min.js"></script>
   <script src="../vendor/cubism4.min.js"></script>
   <script>
-    // 模型入口（换成你的模型目录）
-    const MODEL_URL = "../assets/live2d/chino/chino.model3.json";
+    // 模型入口（?model=chino_q 或 ?model=hiyori 切换，默认智乃）
+    const MODEL_KEYS = { chino: "chino", chino_q: "chino_q", hiyori: "hiyori" };
+    const modelKey = MODEL_KEYS[new URLSearchParams(location.search).get("model")] || "chino";
+    const MODEL_URL = `../assets/live2d/${modelKey}/${modelKey}.model3.json`;
+    // 待机动作组名（智乃是程序化 idle_sway，其余用自带 Idle 组）
+    const IDLE_GROUP = modelKey === "chino" ? "idle_sway" : "Idle";
     const status = (t) => (document.getElementById("status").textContent = t);
 
     (async () => {
@@ -56,6 +60,11 @@
           width: 500,
           height: 640,
         });
+        // ?manualTicker=1：无头浏览器 rAF 被节流时，用 setInterval 手动驱动渲染循环
+        if (new URLSearchParams(location.search).get("manualTicker")) {
+          app.ticker.stop();
+          setInterval(() => app.ticker.update(performance.now()), 16);
+        }
         const model = await PIXI.live2d.Live2DModel.from(MODEL_URL, {
           autoInteract: false, // 实验室内不追踪鼠标，避免干扰动作判断
         });
@@ -68,9 +77,9 @@
         model.pivot.set(lw / 2, lh);
         model.x = 250;
         model.y = 640;
-        model.motion("idle_sway");
+        model.motion(IDLE_GROUP);
         // motionFinish 只在 internalModel.motionManager 上派发；FORCE 接回防优先级竞争
-        model.internalModel.motionManager.on("motionFinish", () => model.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {}));
+        model.internalModel.motionManager.on("motionFinish", () => model.motion(IDLE_GROUP, 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {}));
 
         // 从 model3.json 动态生成按钮
         const settings = await (await fetch(MODEL_URL)).json();
@@ -105,10 +114,26 @@
           status("已重置表情");
         };
         document.getElementById("btn-idle").onclick = () => {
-          model.motion("idle_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+          model.motion(IDLE_GROUP, 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
           status("回到待机");
         };
         status(`就绪：${motions.length} 动作 / ${exprs.length} 表情`);
+        // 调试：?expr=名字 / ?motion=组名 自动应用（无头截图核对用语义）
+        const q = new URLSearchParams(location.search);
+        if (q.get("expr")) {
+          model.expression(q.get("expr"));
+          status("应用表情: " + q.get("expr"));
+          if (q.get("probe")) {
+            const ids = q.get("probe").split(",");
+            setInterval(() => {
+              status(q.get("expr") + " | " + ids.map((id) => {
+                try { return id + "=" + model.internalModel.coreModel.getParameterValueById(id).toFixed(2); }
+                catch (e) { return id + "=?"; }
+              }).join(" "));
+            }, 500);
+          }
+        }
+        if (q.get("motion")) { model.motion(q.get("motion"), 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {}); status("播放动作: " + q.get("motion")); }
       } catch (e) {
         status("加载失败: " + e.message);
         console.error(e);

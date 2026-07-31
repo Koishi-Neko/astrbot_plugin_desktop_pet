@@ -22,8 +22,17 @@
 
   <div id="status-tip" class="hidden"></div>
 
+  <div id="confirm-dialog" class="hidden">
+    <div id="confirm-text"></div>
+    <div class="settings-buttons">
+      <button id="confirm-ok">确定</button>
+      <button id="confirm-cancel">取消</button>
+    </div>
+  </div>
+
   <div id="menu" class="hidden">
     <div class="menu-item" id="menu-toggle-input">聊天</div>
+    <div class="menu-item has-sub" id="menu-model">切换模型 ▸<div class="submenu" id="model-submenu"></div></div>
     <div class="menu-item" id="menu-passthrough">点击穿透 (Ctrl+Shift+P)</div>
     <div class="menu-item" id="menu-settings">设置</div>
     <div class="menu-item danger" id="menu-quit">退出</div>
@@ -36,6 +45,13 @@
     <label>API Key</label>
     <input id="cfg-api-key" type="password" spellcheck="false" />
     <label class="settings-checkbox"><input id="cfg-voice" type="checkbox" /> 语音（日语配音）</label>
+    <div class="settings-divider"></div>
+    <div class="settings-title">上传 Live2D 模型</div>
+    <input id="cfg-model-path" type="text" spellcheck="false" placeholder="模型文件夹 / .model3.json / .zip 路径" />
+    <div class="settings-note">也可以直接把模型文件夹或 zip 拖到桌宠身上；支持 Cubism 3~5（moc3）；rar 请手动解压后再传</div>
+    <div class="settings-buttons">
+      <button id="cfg-model-upload">上传并使用</button>
+    </div>
     <div class="settings-note">主动对话与桌面感知（开关/间隔/模型/名单）在 AstrBot 插件控制页配置</div>
     <div class="settings-buttons">
       <button id="cfg-test">测试连接</button>

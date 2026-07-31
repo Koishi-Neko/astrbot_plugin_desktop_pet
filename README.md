@@ -76,6 +76,10 @@ WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个
 
 任意 Cubism 3/4 模型放入 `pet_shell/src/assets/live2d/chino/` 并把入口命名为 `chino.model3.json`（重新构建后生效），即可替换默认模型。**模型文件名与 model3.json 内部引用需为全 ASCII**。情绪→表情映射在 `pet_shell/src/app.js` 的 `EMOTION_EXPRESSIONS` 中按你的模型实际表情名修改。
 
+多个模型可热切换：在 `app.js` 的 `MODELS` 注册表与 `MODEL_PROFILES` 能力档案中各加一条（资产放入 `assets/live2d/<key>/`），右键菜单「切换模型」即出现对应项，选择即时生效并记忆。
+
+也可以**直接上传模型使用**（无需改代码）：把模型文件夹或 zip 拖到桌宠身上，或在设置面板「上传 Live2D 模型」填路径——支持文件夹 / `.model3.json` / `.zip`（Cubism 3~5 的 moc3），上传后自动切换并记忆，在「切换模型」子菜单中可随时切换或点 `×` 卸载。上传的模型存放在 `%LOCALAPPDATA%\com.astrbotpet.shell\models\`，经壳内 petmodel 协议运行时加载。
+
 仓库内置官方免费示例模型**桃濑日和**（许可见模型目录 `ReadMe.txt` 与[官方许可页](https://www.live2d.com/zh-CHS/download/sample-data/)）。自定义模型涉及版权请勿入库分发（该目录已 gitignore）。
 
 ## 操作一览
@@ -86,7 +90,7 @@ WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个
 | 双击立绘 | 开合输入框，回车发送 |
 | 拖动立绘 | 移动窗口 |
 | 拖动右下角半透明手柄 | 调整窗口与模型大小（自动记忆） |
-| 右键 | 聊天 / 点击穿透 / 设置 / 退出 |
+| 右键 | 聊天 / 切换模型 / 点击穿透 / 设置 / 退出 |
 | `Ctrl+Shift+P` | 切换点击穿透（穿透后只能用快捷键或托盘切回） |
 | 气泡头部粉点 / 点击气泡 | 收起气泡（回复结束 15s 自动收起） |
 | 托盘图标 | 切换穿透 / 退出 |

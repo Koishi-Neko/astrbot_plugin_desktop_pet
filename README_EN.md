@@ -76,6 +76,10 @@ Configured in the plugin control page; the shell pulls changes within ~2 minutes
 
 Drop any Cubism 3/4 model into `pet_shell/src/assets/live2d/chino/` with the entry file named `chino.model3.json` (rebuild required) to replace the default model. **Model file names and references inside model3.json must be ASCII-only.** Map emotions to your model's expression names in `EMOTION_EXPRESSIONS` in `pet_shell/src/app.js`.
 
+Multiple models can be hot-swapped: add one entry each to the `MODELS` registry and the `MODEL_PROFILES` capability map in `app.js` (assets under `assets/live2d/<key>/`), and the right-click "Switch model" submenu picks it up immediately — switching is instant and remembered.
+
+You can also **upload models directly** (no code changes): drop a model folder or zip onto the pet, or fill in a path under "Upload Live2D model" in settings — folders / `.model3.json` / `.zip` are supported (Cubism 3~5, moc3). Uploaded models are switched to immediately, remembered across restarts, and can be uninstalled via the `×` button in the "Switch model" submenu. They live in `%LOCALAPPDATA%\com.astrbotpet.shell\models\` and are served at runtime through the shell's built-in petmodel protocol.
+
 The bundled default model **Momose Hiyori** is Live2D's official free sample (license: see `ReadMe.txt` in the model folder and the [official license page](https://www.live2d.com/zh-CHS/download/sample-data/)). Do not commit custom models to the repo (the folder is gitignored).
 
 ## Controls
@@ -86,7 +90,7 @@ The bundled default model **Momose Hiyori** is Live2D's official free sample (li
 | Double-click model | Toggle input bar; Enter to send |
 | Drag model | Move window |
 | Drag bottom-right handle | Resize window & model (remembered) |
-| Right-click | Chat / click-through / settings / quit |
+| Right-click | Chat / switch model / click-through / settings / quit |
 | `Ctrl+Shift+P` | Toggle click-through (only hotkey or tray can revert) |
 | Pink dot on bubble / click bubble | Collapse bubble (auto-collapses 15s after replies) |
 | Tray icon | Toggle click-through / quit |

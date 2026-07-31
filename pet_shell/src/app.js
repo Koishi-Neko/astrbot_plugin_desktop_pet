@@ -81,8 +81,16 @@ const EMOTION_EXPRESSIONS = {
   "调皮": "closed_smile",
 };
 
+// 可切换模型注册表：key -> 显示名/资产路径
+const MODELS = {
+  chino: { name: "智乃", url: "assets/live2d/chino/chino.model3.json" },
+  chino_q: { name: "智乃Q版", url: "assets/live2d/chino_q/chino_q.model3.json" },
+  hiyori: { name: "桃濑日和", url: "assets/live2d/hiyori/hiyori.model3.json" },
+};
+
 // 模型能力档案：不同模型的表情/动作差异在此收口。
 // hiyori（桃濑日和，官方免费示例模型）无 exp3 表情文件，但有动作组。
+// chino_q（Q版智乃）有 exp3 表情与复用的程序化动作（参数同名），无 coin_sway。
 const MODEL_PROFILES = {
   chino: {
     expressions: EMOTION_EXPRESSIONS,
@@ -91,6 +99,23 @@ const MODEL_PROFILES = {
     pokeMotions: ["nod", "tilt", "sway", "shake"],
     pokeExprs: ["closed_smile", "pout", "blush", "o_surprised"],
     idleMotions: null, // null = 用 IDLE_ACTIONS 原列表
+  },
+  chino_q: {
+    expressions: {
+      "平静": null,
+      "高兴": "heart_eyes_blush",
+      "生气": null,
+      "害羞": "heart_eyes_blush",
+      "惊讶": "o_mouth",
+      "难过": "squeezed_eyes",
+      "疑惑": null,
+      "调皮": "squeezed_eyes",
+    },
+    idleMotion: "Idle",
+    coinSway: false,
+    pokeMotions: ["nod", "tilt", "sway", "shake"],
+    pokeExprs: ["heart_eyes_blush", "squeezed_eyes", "o_mouth", "magic_staff", "hold"],
+    idleMotions: ["nod", "tilt", "sway", "shake"],
   },
   hiyori: {
     expressions: null, // 无表情文件，情绪仅走气泡/语音
@@ -102,31 +127,177 @@ const MODEL_PROFILES = {
   },
 };
 let activeProfile = MODEL_PROFILES.chino; // 加载成功后按实际模型设置
+let currentModelKey = null; // 当前模型 key（MODELS），custom url 时为 chino
 
-// 加载候选：显式自定义（config.local.json live2d.model_url）> 本地智乃 > 内置桃濑日和
+// 加载候选：显式自定义（config.local.json live2d.model_url）> 上次选择 > 本地智乃 > 内置桃濑日和
 function modelCandidates() {
   const list = [];
   const custom = fileConfig && fileConfig.live2d && fileConfig.live2d.model_url;
   if (custom) list.push({ key: "chino", url: custom });
-  list.push({ key: "chino", url: "assets/live2d/chino/chino.model3.json" });
-  list.push({ key: "hiyori", url: "assets/live2d/hiyori/hiyori.model3.json" });
-  return list;
+  const saved = localStorage.getItem("pet_model");
+  if (saved && MODELS[saved]) list.push({ key: saved, url: MODELS[saved].url });
+  list.push({ key: "chino", url: MODELS.chino.url });
+  list.push({ key: "hiyori", url: MODELS.hiyori.url });
+  const seen = new Set();
+  return list.filter((c) => {
+    const k = `${c.key}|${c.url}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+let pixiApp = null;
+let fitModel = null; // 当前模型的自适应布局函数（resize 时调用）
+
+// 把加载好的模型挂上舞台：布局、待机动作、motionFinish 回接
+function attachModel(model, usedKey) {
+  activeProfile = MODEL_PROFILES[usedKey] || MODEL_PROFILES.chino;
+  currentModelKey = usedKey;
+  const pet = document.getElementById("pet");
+  pixiApp.stage.addChild(model);
+  // 记录未缩放的本地尺寸（pivot 必须用本地坐标）
+  const localW = model.width;
+  const localH = model.height;
+  const fit = () => {
+    const w = pet.clientWidth;
+    const h = pet.clientHeight;
+    const scale = Math.min(w / localW, h / localH) * 0.98;
+    model.scale.set(scale);
+    model.pivot.set(localW / 2, localH);
+    model.x = w / 2;
+    model.y = h;
+  };
+  fit();
+  fitModel = fit;
+  live2dModel = model;
+  avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
+  if (activeProfile.idleMotion) model.motion(activeProfile.idleMotion).catch(() => {}); // 待机动作
+  // 任何动作播完都回到待机循环；长待机演出自然结束时复位演出状态
+  // 注意两点：
+  // 1. motionFinish 只在 internalModel.motionManager 上派发（Live2DModel 不转发）；
+  // 2. 必须用 FORCE：被播完的动作若是 FORCE 优先级，此时当前优先级尚未重置，
+  //    NORMAL 会被优先级检查拒绝，导致待机动作接不上
+  model.internalModel.motionManager.on("motionFinish", () => {
+    onLongIdleFinished();
+    if (!activeProfile.idleMotion) return;
+    model
+      .motion(activeProfile.idleMotion, 0, PIXI.live2d.MotionPriority.FORCE)
+      .catch(() => {});
+  });
+}
+
+// 热切换模型：先加载新模型成功后再拆旧模型，失败则原模型不受影响
+let modelSwitching = false;
+async function switchModel(key) {
+  if (!pixiApp || !MODELS[key] || key === currentModelKey || modelSwitching) return;
+  modelSwitching = true;
+  try {
+    await ensureProfile(key);
+    const model = await PIXI.live2d.Live2DModel.from(MODELS[key].url);
+    exitLongIdle(); // 安全：未在演出中直接返回
+    if (emotionResetTimer) {
+      clearTimeout(emotionResetTimer);
+      emotionResetTimer = null;
+    }
+    currentEmotion = "平静";
+    const old = live2dModel;
+    live2dModel = null;
+    fitModel = null;
+    if (old) {
+      pixiApp.stage.removeChild(old);
+      old.destroy();
+    }
+    attachModel(model, key);
+    localStorage.setItem("pet_model", key);
+    showStatusTip(`已切换：${MODELS[key].name}`, 2000);
+  } catch (e) {
+    console.warn(`切换模型失败（${key}）：`, e);
+    showStatusTip(`模型加载失败：${MODELS[key].name}`, 2500);
+  } finally {
+    modelSwitching = false;
+  }
+}
+
+// ---------- 用户上传模型（磁盘加载，petmodel 自定义协议） ----------
+
+// petmodel 协议（Rust 侧服务 appdata models 目录）：路径带 "/" 层级，model3.json 相对引用可正确解析
+const uploadedModelUrl = (key) => `http://petmodel.localhost/${key}/model.model3.json`;
+
+// 上传模型的通用能力档案：动作组全用，无表情映射（情绪走气泡/语音，同 hiyori 策略）
+function genericProfile(settings) {
+  const groups = Object.keys((settings && settings.FileReferences && settings.FileReferences.Motions) || {});
+  const idle = groups.find((g) => /^idle$/i.test(g)) || groups[0] || null;
+  return {
+    expressions: null,
+    idleMotion: idle,
+    coinSway: false,
+    pokeMotions: groups,
+    pokeExprs: [],
+    idleMotions: groups, // 空数组也是 truthy：无动作时待机池只剩视线游移
+  };
+}
+
+// 上传模型首次使用前从 model3.json 构建通用档案
+async function ensureProfile(key) {
+  if (MODEL_PROFILES[key] || !MODELS[key] || !MODELS[key].uploaded) return;
+  try {
+    const settings = await (await fetch(MODELS[key].url)).json();
+    MODEL_PROFILES[key] = genericProfile(settings);
+  } catch (e) {
+    console.warn(`构建模型档案失败（${key}），用空档案兜底：`, e);
+    MODEL_PROFILES[key] = {
+      expressions: null,
+      idleMotion: null,
+      coinSway: false,
+      pokeMotions: [],
+      pokeExprs: [],
+      idleMotions: [],
+    };
+  }
+}
+
+// 启动时把 appdata models 目录里已上传的模型并入注册表（须在 modelCandidates 之前）
+async function registerUploadedModels() {
+  try {
+    const list = await invoke()("pet_model_list");
+    for (const m of list) {
+      MODELS[m.key] = { name: m.name, url: uploadedModelUrl(m.key), uploaded: true };
+    }
+    if (list.length) console.log(`[live2d] 已注册 ${list.length} 个上传模型`);
+  } catch (e) {
+    console.warn("读取已上传模型失败:", e);
+  }
+}
+
+// 上传（文件夹/.model3.json/.zip）→ 注册 → 自动切换
+async function handleModelUpload(srcPath) {
+  const m = await invoke()("pet_model_upload", { srcPath });
+  MODELS[m.key] = { name: m.name, url: uploadedModelUrl(m.key), uploaded: true };
+  await ensureProfile(m.key);
+  renderModelSubmenu();
+  await switchModel(m.key); // 内部会状态提示
+  return m;
 }
 
 async function initLive2D() {
   try {
     if (!window.PIXI || !PIXI.live2d || !PIXI.live2d.Live2DModel) return;
+    await registerUploadedModels();
     // 高倍缩小模型时开 mipmap，减少锯齿/模糊
     PIXI.settings.MIPMAP_TEXTURES = PIXI.MIPMAP_MODES.ON;
     const canvas = document.getElementById("live2d-canvas");
     const pet = document.getElementById("pet");
-    const app = new PIXI.Application({
+    pixiApp = new PIXI.Application({
       view: canvas,
       transparent: true,
       autoStart: true,
       resizeTo: pet,
       resolution: window.devicePixelRatio || 1, // 高分屏按物理像素渲染
       autoDensity: true,
+    });
+    pixiApp.renderer.on("resize", () => {
+      if (fitModel) fitModel();
     });
     let model = null;
     let usedKey = null;
@@ -140,39 +311,9 @@ async function initLive2D() {
       }
     }
     if (!model) throw new Error("所有候选模型均加载失败");
-    activeProfile = MODEL_PROFILES[usedKey] || MODEL_PROFILES.chino;
     console.log(`[live2d] 使用模型档案: ${usedKey}`);
-    app.stage.addChild(model);
-    // 记录未缩放的本地尺寸（pivot 必须用本地坐标）
-    const localW = model.width;
-    const localH = model.height;
-
-    const fit = () => {
-      const w = pet.clientWidth;
-      const h = pet.clientHeight;
-      const scale = Math.min(w / localW, h / localH) * 0.98;
-      model.scale.set(scale);
-      model.pivot.set(localW / 2, localH);
-      model.x = w / 2;
-      model.y = h;
-    };
-    fit();
-    app.renderer.on("resize", fit);
-
-    live2dModel = model;
-    avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
-    model.motion(activeProfile.idleMotion).catch(() => {}); // 待机动作
-    // 任何动作播完都回到待机循环；长待机演出自然结束时复位演出状态
-    // 注意两点：
-    // 1. motionFinish 只在 internalModel.motionManager 上派发（Live2DModel 不转发）；
-    // 2. 必须用 FORCE：被播完的动作若是 FORCE 优先级，此时当前优先级尚未重置，
-    //    NORMAL 会被优先级检查拒绝，导致待机动作接不上
-    model.internalModel.motionManager.on("motionFinish", () => {
-      onLongIdleFinished();
-      model
-        .motion(activeProfile.idleMotion, 0, PIXI.live2d.MotionPriority.FORCE)
-        .catch(() => {});
-    });
+    await ensureProfile(usedKey);
+    attachModel(model, usedKey);
   } catch (e) {
     console.warn("Live2D 初始化失败，回退为静态立绘：", e);
   }
@@ -592,7 +733,9 @@ function poke() {
     return;
   }
   const canExpr = activeProfile.pokeExprs.length > 0;
-  if (Math.random() < 0.6 || !canExpr) {
+  const canMotion = activeProfile.pokeMotions.length > 0;
+  if (!canExpr && !canMotion) return;
+  if ((canMotion && Math.random() < 0.6) || !canExpr) {
     const pool = activeProfile.pokeMotions;
     const m = pool[Math.floor(Math.random() * pool.length)];
     console.log("[poke]", m);
@@ -613,12 +756,72 @@ chatInput.addEventListener("keydown", (e) => {
   }
 });
 
+// 窗口内确认框（原生 confirm() 超出小窗边界会被裁剪，禁用）
+function askConfirm(text) {
+  return new Promise((resolve) => {
+    const dlg = $("confirm-dialog");
+    $("confirm-text").textContent = text;
+    dlg.classList.remove("hidden");
+    const done = (v) => {
+      dlg.classList.add("hidden");
+      $("confirm-ok").onclick = $("confirm-cancel").onclick = null;
+      resolve(v);
+    };
+    $("confirm-ok").onclick = () => done(true);
+    $("confirm-cancel").onclick = () => done(false);
+  });
+}
+
+// 切换模型子菜单：从 MODELS 动态生成，当前模型打勾；上传的模型带卸载按钮
+function renderModelSubmenu() {
+  const sub = $("model-submenu");
+  if (!sub) return;
+  sub.innerHTML = "";
+  for (const [key, m] of Object.entries(MODELS)) {
+    const div = document.createElement("div");
+    div.className = "menu-item" + (key === currentModelKey ? " active" : "");
+    div.textContent = (key === currentModelKey ? "✓ " : "") + m.name;
+    div.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.classList.add("hidden");
+      switchModel(key).then(renderModelSubmenu);
+    });
+    if (m.uploaded) {
+      const del = document.createElement("span");
+      del.className = "model-del";
+      del.textContent = "×";
+      del.title = "卸载该模型（删除本地文件）";
+      del.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!(await askConfirm(`卸载模型「${m.name}」？将删除其本地文件。`))) return;
+        try {
+          if (key === currentModelKey) await switchModel("chino");
+          await invoke()("pet_model_delete", { key });
+          delete MODELS[key];
+          delete MODEL_PROFILES[key];
+          if (localStorage.getItem("pet_model") === key) {
+            localStorage.removeItem("pet_model");
+          }
+          showStatusTip(`已卸载：${m.name}`, 2000);
+        } catch (err) {
+          showStatusTip(`卸载失败：${err}`, 3000);
+        }
+        menu.classList.add("hidden");
+        renderModelSubmenu();
+      });
+      div.appendChild(del);
+    }
+    sub.appendChild(div);
+  }
+}
+
 // 右键菜单
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   settings.classList.add("hidden");
+  renderModelSubmenu();
   menu.classList.remove("hidden");
-  const w = 190, h = 140;
+  const w = 190, h = 175;
   menu.style.left = Math.min(e.clientX, window.innerWidth - w) + "px";
   menu.style.top = Math.min(e.clientY, window.innerHeight - h) + "px";
 });
@@ -630,9 +833,15 @@ document.addEventListener("click", (e) => {
 // 点击窗口外的桌面区域会让窗口失焦，此时也收起菜单
 window.addEventListener("blur", () => menu.classList.add("hidden"));
 
-// Esc 关闭菜单
+// Esc 关闭菜单/确认框
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") menu.classList.add("hidden");
+  if (e.key !== "Escape") return;
+  menu.classList.add("hidden");
+  const dlg = $("confirm-dialog");
+  if (dlg && !dlg.classList.contains("hidden")) {
+    dlg.classList.add("hidden");
+    if ($("confirm-cancel").onclick) $("confirm-cancel").onclick();
+  }
 });
 
 $("menu-toggle-input").addEventListener("click", () => {
@@ -692,6 +901,39 @@ $("cfg-test").addEventListener("click", async () => {
     $("cfg-message").textContent = `连接失败：${err}`;
   }
 });
+
+// 上传模型（路径输入）
+$("cfg-model-upload").addEventListener("click", async () => {
+  const p = $("cfg-model-path").value.trim();
+  if (!p) {
+    $("cfg-message").textContent = "请先填模型路径。";
+    return;
+  }
+  $("cfg-message").textContent = "导入中…";
+  try {
+    const m = await handleModelUpload(p);
+    $("cfg-model-path").value = "";
+    $("cfg-message").textContent = `已导入并切换：${m.name}`;
+  } catch (e) {
+    $("cfg-message").textContent = `导入失败：${e}`;
+  }
+});
+
+// 拖拽上传：Tauri 2 原生拖放事件（HTML5 DnD 被其取代），drop 即导入
+if (window.__TAURI__ && window.__TAURI__.webview) {
+  window.__TAURI__.webview
+    .getCurrentWebview()
+    .onDragDropEvent((ev) => {
+      const p = ev.payload;
+      if (p.type === "drop" && p.paths && p.paths.length) {
+        showStatusTip("正在导入模型…");
+        handleModelUpload(p.paths[0])
+          .then((m) => showStatusTip(`已导入：${m.name}`, 2500))
+          .catch((e) => showStatusTip(`导入失败：${e}`, 4000));
+      }
+    })
+    .catch((e) => console.warn("拖放监听注册失败:", e));
+}
 
 // ---------- 穿透状态提示（由 Rust 侧回调） ----------
 

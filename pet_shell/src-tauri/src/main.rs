@@ -337,6 +337,481 @@ fn capture_window() -> Result<capture::CaptureResult, String> {
     capture::capture_foreground()
 }
 
+// ---------- 用户模型上传/卸载（磁盘模型运行时经 asset protocol 加载） ----------
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+#[derive(serde::Serialize)]
+struct UploadedModel {
+    key: String,
+    name: String,
+    entry_path: String,
+}
+
+fn models_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let p = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+    Ok(p)
+}
+
+/// 目录名 → key：小写字母数字-_，其余折叠为 _；空则 model
+fn ascii_slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        let lc = c.to_ascii_lowercase();
+        if lc.is_ascii_alphanumeric() || lc == '-' || lc == '_' {
+            out.push(lc);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let t = out.trim_matches('_').to_string();
+    if t.is_empty() { "model".into() } else { t }
+}
+
+fn unique_key(root: &Path, base: &str) -> String {
+    let mut k = base.to_string();
+    let mut i = 2;
+    while root.join(&k).exists() {
+        k = format!("{base}_{i}");
+        i += 1;
+    }
+    k
+}
+
+/// 文件名是否可直接保留（asset protocol 对非 ASCII 路径不友好，坑 4）
+fn ascii_filename(name: &str) -> Option<String> {
+    if name.is_ascii()
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// 递归找入口 .model3.json（多个时取路径最浅的）
+fn find_model3(root: &Path) -> Result<PathBuf, String> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| e.to_string())? {
+            let p = e.map_err(|e| e.to_string())?.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p
+                .file_name()
+                .map(|n| n.to_string_lossy().ends_with(".model3.json"))
+                .unwrap_or(false)
+            {
+                found.push(p);
+            }
+        }
+    }
+    match found.len() {
+        0 => Err("未找到 .model3.json 入口文件".into()),
+        _ => {
+            found.sort_by_key(|p| p.components().count());
+            Ok(found.remove(0))
+        }
+    }
+}
+
+/// moc3 头校验：magic MOC3 + 版本字节 1..=5（1=3.0~3.2 … 5=5.0；仅远古 .moc 不支持）
+fn check_moc3(path: &Path) -> Result<(), String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut b = [0u8; 8];
+    let n = f.read(&mut b).map_err(|e| e.to_string())?;
+    if n < 5 || &b[0..4] != b"MOC3" {
+        return Err("moc3 文件无效（magic 不是 MOC3）".into());
+    }
+    let v = b[4];
+    if !(1..=5).contains(&v) {
+        return Err(format!("不支持的 moc3 版本字节 {v}（支持 1~5，即 Cubism 3~5）"));
+    }
+    Ok(())
+}
+
+fn extract_zip(zip_path: &Path) -> Result<PathBuf, String> {
+    let f = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut za = zip::ZipArchive::new(f).map_err(|e| format!("zip 打开失败: {e}"))?;
+    let dest = std::env::temp_dir().join(format!("pet_shell_upload_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    for i in 0..za.len() {
+        let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
+        let Some(rel) = zf.enclosed_name() else { continue };
+        let out = dest.join(rel);
+        if zf.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = out.parent() {
+                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+            }
+            let mut w = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+            std::io::copy(&mut zf, &mut w).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(dest)
+}
+
+/// 改写 model3.json 的 FileReferences，把相对引用替换为扁平化后的新文件名
+fn rewrite_model3(json_text: &str, map: &HashMap<String, String>) -> Result<String, String> {
+    let mut v: serde_json::Value = serde_json::from_str(json_text).map_err(|e| e.to_string())?;
+    let norm = |s: &str| s.replace('\\', "/").trim_start_matches("./").to_string();
+    let Some(fr) = v.get_mut("FileReferences") else {
+        return Err("model3.json 缺少 FileReferences".into());
+    };
+    for key in ["Moc", "Physics", "Pose", "DisplayInfo", "UserData"] {
+        if let Some(old) = fr.get(key).and_then(|x| x.as_str()).map(|s| s.to_string()) {
+            if let Some(n) = map.get(&norm(&old)) {
+                fr[key] = serde_json::Value::String(n.clone());
+            }
+        }
+    }
+    if let Some(tex) = fr.get_mut("Textures").and_then(|x| x.as_array_mut()) {
+        for t in tex.iter_mut() {
+            if let Some(s) = t.as_str() {
+                if let Some(n) = map.get(&norm(s)) {
+                    *t = serde_json::Value::String(n.clone());
+                }
+            }
+        }
+    }
+    if let Some(groups) = fr.get_mut("Motions").and_then(|x| x.as_object_mut()) {
+        for (_, arr) in groups.iter_mut() {
+            if let Some(items) = arr.as_array_mut() {
+                for it in items.iter_mut() {
+                    if let Some(old) = it.get("File").and_then(|x| x.as_str()).map(|s| s.to_string()) {
+                        if let Some(n) = map.get(&norm(&old)) {
+                            it["File"] = serde_json::Value::String(n.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(exprs) = fr.get_mut("Expressions").and_then(|x| x.as_array_mut()) {
+        for it in exprs.iter_mut() {
+            if let Some(old) = it.get("File").and_then(|x| x.as_str()).map(|s| s.to_string()) {
+                if let Some(n) = map.get(&norm(&old)) {
+                    it["File"] = serde_json::Value::String(n.clone());
+                }
+            }
+        }
+    }
+    serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
+}
+
+fn import_model_dir(
+    app: &tauri::AppHandle,
+    src: &Path,
+    display_override: Option<String>,
+) -> Result<UploadedModel, String> {
+    // 入口与模型根目录（入口所在目录即根，其外层的 VTS 配置等不带）
+    let entry = if src.is_file() {
+        if !src
+            .file_name()
+            .map(|n| n.to_string_lossy().ends_with(".model3.json"))
+            .unwrap_or(false)
+        {
+            return Err("所选文件不是 .model3.json".into());
+        }
+        src.to_path_buf()
+    } else {
+        find_model3(src)?
+    };
+    let root = entry.parent().ok_or("模型路径异常")?;
+    let display = display_override
+        .filter(|s| !s.is_empty())
+        .or_else(|| root.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "未命名模型".into());
+
+    // 收集全部文件（递归），生成 相对路径 -> 扁平 ASCII 新名 映射
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| e.to_string())? {
+            let p = e.map_err(|e| e.to_string())?.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                files.push(p);
+            }
+        }
+    }
+    let entry_rel = entry
+        .strip_prefix(root)
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut used: HashSet<String> = HashSet::new();
+    used.insert("model.model3.json".to_string()); // 入口统一命名，先占位
+    used.insert("meta.json".to_string());
+    let mut idx = 0u32;
+    for p in &files {
+        let rel = p
+            .strip_prefix(root)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel == entry_rel {
+            continue; // 入口最后统一处理
+        }
+        let fname = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut candidate = ascii_filename(&fname);
+        if candidate.as_deref().map(|c| used.contains(c)).unwrap_or(true) {
+            // 复合扩展名（.motion3.json 等）从第一个点开始保留，非 ASCII 安全则取最后一段
+            let ext = match fname.find('.') {
+                Some(i) => {
+                    let e = &fname[i..];
+                    if ascii_filename(&format!("x{e}")).is_some() {
+                        e.to_ascii_lowercase()
+                    } else {
+                        p.extension()
+                            .map(|x| format!(".{}", x.to_string_lossy().to_ascii_lowercase()))
+                            .unwrap_or_default()
+                    }
+                }
+                None => String::new(),
+            };
+            loop {
+                idx += 1;
+                let c = format!("f{idx}{ext}");
+                if !used.contains(&c) {
+                    candidate = Some(c);
+                    break;
+                }
+            }
+        }
+        let name = candidate.unwrap();
+        used.insert(name.clone());
+        map.insert(rel, name);
+    }
+
+    // 校验 model3.json + moc3
+    let model3_text = std::fs::read_to_string(&entry)
+        .map_err(|e| format!("model3.json 读取失败（需 UTF-8）: {e}"))?;
+    let model3: serde_json::Value =
+        serde_json::from_str(&model3_text).map_err(|e| format!("model3.json 解析失败: {e}"))?;
+    if model3.get("Version").and_then(|v| v.as_i64()).unwrap_or(0) < 3 {
+        return Err("model3.json Version 缺失或过低（仅支持 Cubism 3~5 的 moc3 模型）".into());
+    }
+    let moc_rel = model3
+        .get("FileReferences")
+        .and_then(|fr| fr.get("Moc"))
+        .and_then(|m| m.as_str())
+        .ok_or("model3.json 缺少 FileReferences.Moc")?
+        .replace('\\', "/");
+    let moc_path = root.join(&moc_rel);
+    if !moc_path.exists() {
+        return Err(format!("moc 文件不存在: {moc_rel}"));
+    }
+    check_moc3(&moc_path)?;
+
+    // 落盘：复制（扁平新名）+ 重写后的入口 + meta.json
+    let dest_root = models_root(app)?;
+    let key = unique_key(&dest_root, &ascii_slug(&display));
+    let dest = dest_root.join(&key);
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), String> {
+        for p in &files {
+            let rel = p
+                .strip_prefix(root)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if rel == entry_rel {
+                continue;
+            }
+            let Some(name) = map.get(&rel) else { continue };
+            std::fs::copy(p, dest.join(name)).map_err(|e| e.to_string())?;
+        }
+        let rewritten = rewrite_model3(&model3_text, &map)?;
+        std::fs::write(dest.join("model.model3.json"), rewritten).map_err(|e| e.to_string())?;
+        let meta = serde_json::json!({
+            "name": display,
+            "entry": "model.model3.json",
+        });
+        std::fs::write(dest.join("meta.json"), meta.to_string()).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(e);
+    }
+    Ok(UploadedModel {
+        key,
+        name: display,
+        entry_path: dest.join("model.model3.json").to_string_lossy().to_string(),
+    })
+}
+
+/// 上传模型：文件夹 / .model3.json / .zip，复制到 appdata models 目录并 ASCII 化。
+#[tauri::command]
+fn pet_model_upload(app: tauri::AppHandle, src_path: String) -> Result<UploadedModel, String> {
+    let cleaned = src_path.trim().trim_matches('"').to_string();
+    let mut src = PathBuf::from(&cleaned);
+    if !src.exists() {
+        return Err(format!("路径不存在: {cleaned}"));
+    }
+    let mut temp_dir: Option<PathBuf> = None;
+    let mut display_override: Option<String> = None;
+    if src.is_file()
+        && src
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+    {
+        display_override = src.file_stem().map(|n| n.to_string_lossy().to_string());
+        let d = extract_zip(&src)?;
+        temp_dir = Some(d.clone());
+        src = d;
+    }
+    let result = import_model_dir(&app, &src, display_override);
+    if let Some(d) = temp_dir {
+        let _ = std::fs::remove_dir_all(d);
+    }
+    result
+}
+
+/// 列出已上传模型（扫描 appdata models 目录）。
+#[tauri::command]
+fn pet_model_list(app: tauri::AppHandle) -> Result<Vec<UploadedModel>, String> {
+    let root = models_root(&app)?;
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+        let dir = e.map_err(|e| e.to_string())?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(meta_text) = std::fs::read_to_string(dir.join("meta.json")) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_text) else {
+            continue;
+        };
+        let entry = meta
+            .get("entry")
+            .and_then(|x| x.as_str())
+            .unwrap_or("model.model3.json");
+        let entry_p = dir.join(entry);
+        if !entry_p.exists() {
+            continue;
+        }
+        let name = meta
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("未命名模型")
+            .to_string();
+        let key = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        out.push(UploadedModel {
+            key,
+            name,
+            entry_path: entry_p.to_string_lossy().to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// 卸载模型：删除 appdata models 下的整个目录（key 限字符防路径穿越）。
+#[tauri::command]
+fn pet_model_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err("非法模型 key".into());
+    }
+    let dir = models_root(&app)?.join(&key);
+    if !dir.exists() {
+        return Err("模型不存在".into());
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 简单百分号解码（petmodel 协议路径用；文件名已扁平 ASCII 化，解码仅为兜底）
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// petmodel://localhost/<key>/<file> —— 只服务 appdata models 目录下的已上传模型。
+/// 自定义协议（Windows 下为 http://petmodel.localhost）路径带真实 "/" 层级，
+/// model3.json 内的相对引用可正确解析（asset protocol 全量百分号编码做不到，坑 4 延伸）。
+fn petmodel_response(status: u16, mime: &str, body: Vec<u8>) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(status)
+        .header("Content-Type", mime)
+        .header("Access-Control-Allow-Origin", "*")
+        .body(body)
+        .unwrap()
+}
+
+fn serve_petmodel(app: &tauri::AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    let bad = |msg: &str| petmodel_response(403, "text/plain", msg.as_bytes().to_vec());
+    let path = request.uri().path().trim_start_matches('/');
+    let decoded = percent_decode(path);
+    let parts: Vec<&str> = decoded.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.len() != 2 || parts.iter().any(|p| p.contains("..") || p.contains('\\')) {
+        return bad("bad path");
+    }
+    let key = parts[0];
+    let file = parts[1];
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return bad("bad key");
+    }
+    let Ok(root) = models_root(app) else {
+        return bad("no root");
+    };
+    let full = root.join(key).join(file);
+    match std::fs::read(&full) {
+        Ok(bytes) => {
+            let mime = match full.extension().and_then(|e| e.to_str()).unwrap_or("") {
+                "json" => "application/json",
+                "png" => "image/png",
+                _ => "application/octet-stream",
+            };
+            petmodel_response(200, mime, bytes)
+        }
+        Err(_) => petmodel_response(404, "text/plain", b"not found".to_vec()),
+    }
+}
+
 // ---------- 态势感知（主动对话用） ----------
 
 #[derive(serde::Serialize)]
@@ -434,6 +909,9 @@ fn get_system_context() -> Result<SystemContext, String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .register_uri_scheme_protocol("petmodel", |ctx, request| {
+            serve_petmodel(ctx.app_handle(), &request)
+        })
         .invoke_handler(tauri::generate_handler![
             set_click_through,
             quit_app,
@@ -446,7 +924,10 @@ fn main() {
             pet_get,
             pet_post_json,
             capture_window,
-            get_system_context
+            get_system_context,
+            pet_model_upload,
+            pet_model_list,
+            pet_model_delete
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
