@@ -1,54 +1,74 @@
 # astrbot_plugin_desktop_pet
 
-**中文** | [English](README_EN.md)
+**把 AstrBot 变成 Windows 桌面 Live2D 桌宠** —— 也可以**完全不需要 AstrBot**：独立模式直连任意 OpenAI 兼容大模型，5 分钟跑起来。
 
-把 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 变成 Windows 桌面 Live2D 桌宠的大脑：桌宠是 AstrBot 里的一个 webchat 会话，人格、记忆、历史全都在 AstrBot 侧，换个皮就是同一个它。
+[中文](README.md) | [English](README_EN.md)
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)
+[![Release](https://img.shields.io/github/v/release/Koishi-Neko/astrbot_plugin_desktop_pet.svg)](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Koishi-Neko/astrbot_plugin_desktop_pet/release.yml?label=CI)](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/actions)
 
 <!-- 演示截图：docs/assets/pet-demo.png（模型 + 气泡 + 输入框同框） -->
 ![演示](docs/assets/pet-demo.png)
 
+## 目录
+
+- [特性](#特性)
+- [快速开始](#快速开始)
+- [独立模式](#独立模式)
+- [进阶玩法](#进阶玩法)
+- [操作一览](#操作一览)
+- [从源码构建](#从源码构建)
+- [常见问题](#常见问题)
+- [开发文档](#开发文档)
+- [许可](#许可)
+
 ## 特性
 
+一只住在你 Windows 桌面上的 Live2D 桌宠，两种运行方式：
+
+| | AstrBot 模式（完整版） | 独立模式（轻量版） |
+| --- | --- | --- |
+| 大脑 | AstrBot（webchat 管道） | 任意 OpenAI 兼容大模型（云端 / 本地 Ollama） |
+| 人格 / 历史 | 会话级人格 + 平台历史，可装记忆插件（LivingMemory） | 设置面板填人格文本，会话内记忆 |
+| 日语配音 | SBV2 合成，逐句播放 + 口型同步 | 同左（TTS 地址可配） |
+| 需要部署 | AstrBot（Docker / 本机） | 什么都不用，5 分钟上手 |
+
 - **Live2D 桌面立绘**：透明无边框置顶小窗，情绪表情、戳一戳互动、视线跟随、随机待机小动作、长待机演出
-- **完整聊天能力**：走 AstrBot webchat 管道，会话级人格、平台历史与日志自动继承；安装记忆类插件（如 LivingMemory）时还会自动获得记忆召回/反思，不装也不影响任何功能
-- **打字机气泡 + 输入框**：双击立绘开聊，回复带情绪标签自动切表情
-- **日语配音（可选）**：Style-Bert-VITS2 合成，逐句播放 + 口型同步；QQ 侧 bot 回复也能附带配音
-- **主动搭话**：深夜催睡、回来问候、久坐提醒；桌面感知可看着你的屏幕内容自然搭话（可配禁止抓取名单）
-- **WebUI 控制页**：服务侧配置全部图形化，保存即生效，无需重启
+- **多模型热切换**：内置桃濑日和 + 智乃/智乃Q版（本地），右键菜单即时切换并记忆；也可以把任意 Cubism 3~5 模型**拖拽上传**即用（支持文件夹 / .model3.json / .zip）
+- **打字机气泡 + 输入框**：回复带【情绪】标签自动切表情，中文气泡 + 可选日语逐句配音
+- **主动搭话**：深夜催睡、回来问候、久坐提醒；桌面感知会看着你的屏幕内容自然搭话（可配禁止抓取名单，微信/QQ/Office 等默认不抓）
+- **WebUI 控制页**：AstrBot 模式下服务侧配置全部图形化，保存即生效
 
 ## 快速开始
 
+### 路线 A：5 分钟体验（无 AstrBot）
+
+1. 到 [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) 下载 Windows 便携版（zip 解压即用，或 NSIS 安装包）。
+   > 首次运行若出现 SmartScreen「Windows 已保护你的电脑」：exe 未购买代码签名所致，点「仍要运行」即可。
+2. 右键立绘 → **设置 → 运行模式 → 独立模式**，填三项：
+   - 模型地址（OpenAI 兼容，如 `https://api.deepseek.com/v1`；本地 [Ollama](https://ollama.com) 填 `http://localhost:11434/v1`）
+   - 模型 API Key（本地 Ollama 可随便填）
+   - 对话模型名（如 `deepseek-chat`）
+3. 点「测试连接」看到模型回复即成功，双击立绘开聊。
+
+日语配音（可选）：需要本机部署 [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2)，见[独立模式](#独立模式)末尾说明。
+
+### 路线 B：AstrBot 完整玩法（人格 / 记忆 / QQ）
+
 前提：已部署 AstrBot v4 并能打开 WebUI（默认 `http://localhost:6185`）。部署见 [AstrBot 官方文档](https://docs.astrbot.app/)。
 
-### 1. 安装插件
-
-WebUI → 插件 → 安装插件 → 填本仓库地址 `https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet`。
-
-> 插件用到的 webchat 平台是 AstrBot 内置的，无需在「平台」配置里添加。
-
-### 2. 创建 API Key
-
-WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个 scope，复制保存。
-
-### 3. 获取桌宠壳
-
-到 [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) 下载 Windows 版（NSIS 安装包，或便携 zip 解压即用）。
-
-> 首次运行若出现 SmartScreen「Windows 已保护你的电脑」：exe 未购买代码签名所致，点「仍要运行」即可。想自己构建见下文[从源码构建](#从源码构建)。
-
-### 4. 首次配置
-
-首次启动桌宠会提示你配置：**右键立绘 → 设置**，填 AstrBot 地址（`http://localhost:6185` 即可，自动补全路径）和上一步的 API Key，点「测试连接」——plugin / chat / file 三项全绿即完成。
-
-双击立绘打开输入框，开始聊天吧。
-
-### 5.（可选）给桌宠选人格
-
-**WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页 → 桌宠人格**，下拉选择保存即可（不设置则跟随 AstrBot 默认人格）。桌宠尚未发言时会话不存在，先发一条消息再来设置。
+1. **安装插件**：WebUI → 插件 → 安装插件 → 填本仓库地址 `https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet`。
+   > 插件用到的 webchat 平台是 AstrBot 内置的，无需在「平台」配置里添加。
+2. **创建 API Key**：WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个 scope，复制保存。
+3. **获取桌宠壳**：[Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) 下载 Windows 版（NSIS 安装包，或便携 zip）。
+4. **首次配置**：右键立绘 → 设置，填 AstrBot 地址（`http://localhost:6185` 即可，自动补全路径）和 API Key，点「测试连接」——plugin / chat / file 三项全绿即完成。双击立绘开始聊天。
+5. **（可选）给桌宠选人格**：WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页 → 桌宠人格，下拉选择保存（不设置则跟随 AstrBot 默认人格）。桌宠尚未发言时会话不存在，先发一条消息再来设置。
 
 服务侧进阶配置（TTS、主动对话、桌面感知、主人身份、QQ 配音）都在 **WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页**，保存即生效。
 
-## 独立模式（无 AstrBot）
+## 独立模式
 
 不想部署 AstrBot 也能让桌宠工作：**设置面板 → 运行模式 → 独立模式**，桌宠改为直连任意 OpenAI 兼容的大模型 API（云端如 DeepSeek / Kimi，或本地 Ollama），对话、情绪表情、日语配音、主动对话/桌面感知全部可用，唯一区别是**没有长期记忆**（LivingMemory 等 AstrBot 插件能力，仅有本次运行的会话历史）。
 
@@ -101,7 +121,7 @@ WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个
 
 ### 主动对话与桌面感知
 
-在插件控制页配置，壳端约 2 分钟内拉取生效：
+在插件控制页配置（独立模式在 `config.local.json` 的 `proactive` 节），壳端约 2 分钟内拉取生效：
 
 - **主动对话**：深夜催睡（23-02 点连续活动）、回来问候（离开 30min 后回归）、久坐提醒（连续活动 2h）。全局节流 45 分钟，全屏/输入中/离开状态不打扰。
 - **桌面感知**：按观察间隔抓取**前台窗口**画面发给视觉模型，看到值得评论的内容（游戏进展、有趣页面）自然搭话，没什么可说的就安静。**截图会发送给你的 LLM 提供商**；「禁止抓取名单」内进程（默认含微信/QQ/钉钉/Office 等）在前台时直接跳过、不截图。独占全屏游戏抓不到（无边框窗口化即可）。
@@ -145,20 +165,29 @@ npm run build   # 产出独立 exe：src-tauri/target/release/pet_shell.exe
 > Live2D 渲染库（pixi / pixi-live2d-display / Live2D Cubism Core）因许可原因不入库，由 `tools/fetch_vendor.py` 按 SHA256 校验下载。下载失败请检查网络连接后重跑 `npm run setup`。
 > 注意：`npm run dev` 产出的 debug exe 脱离 CLI 直接启动会白屏，独立运行请用 `npm run build` 的产物。
 
-可在 `pet_shell/src/` 放 `config.local.json` 预置配置（已 gitignore）：
+可在 `pet_shell/src/` 放 `config.local.json` 预置配置（已 gitignore；release 构建会内嵌此文件，构建机请勿放私钥，分发用户建议用设置面板配置）：
 
 ```json
 {
+  "mode": "astrbot",
   "base_url": "http://localhost:6185",
-  "api_key": "你的 API Key"
+  "api_key": "你的 API Key",
+  "standalone": {
+    "llm_base_url": "https://api.deepseek.com/v1",
+    "llm_api_key": "你的模型 API Key",
+    "llm_model": "deepseek-chat",
+    "tts_url": "http://localhost:5001"
+  }
 }
 ```
 
 ## 常见问题
 
-- **桌宠无回复**：设置面板点「测试连接」看分项结果；确认 AstrBot 日志有 `[desktop_pet] web api registered`；API Key 需 plugin+chat scope（桌面感知还要 file scope）。
+- **桌宠无回复（AstrBot 模式）**：设置面板点「测试连接」看分项结果；确认 AstrBot 日志有 `[desktop_pet] web api registered`；API Key 需 plugin+chat scope（桌面感知还要 file scope）。
+- **桌宠无回复（独立模式）**：设置面板切到独立模式点「测试连接」；模型地址以 `/v1` 结尾最稳（根地址会自动补）；本地 Ollama 的 API Key 可随便填但不能为空。
+- **独立模式没有长期记忆**：这是 V1 设计如此（会话内历史仍在）；需要记忆请用 AstrBot 模式 + LivingMemory。
 - **Live2D 不显示（源码运行）**：确认 `src/vendor/` 下三个 js 已下载（`npm run setup`）；模型路径含非 ASCII 字符或模型非 Cubism 3/4 也会加载失败。
-- **没有语音**：控制页 TTS 开关、SBV2 状态「可达」、模型/说话人已选，壳端设置「语音」开关——三处都要开。
+- **没有语音**：控制页 TTS 开关、SBV2 状态「可达」、模型/说话人已选，壳端设置「语音」开关——三处都要开（独立模式检查设置面板 TTS 地址）。
 - **回复不切表情**：模型没按格式输出情绪标签时用「平静」兜底，属正常；可在人格 prompt 里强化格式要求。
 - **远端 AstrBot**：设置里把地址改成对应主机即可。API Key 即鉴权，请勿把 6185 端口暴露到公网。
 
