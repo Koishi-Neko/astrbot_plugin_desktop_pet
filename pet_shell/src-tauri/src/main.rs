@@ -438,6 +438,90 @@ async fn pet_tts_sbv2(
     Ok(serde_json::json!({"audio": b64, "format": "wav"}).to_string())
 }
 
+// ---------- 语音输入（本地 ASR @ 127.0.0.1:5055，whisper @ NPU） ----------
+
+/// 授予 WebView2 麦克风权限（tauri.localhost / dev 地址），启动时调用一次；
+/// 失败仅记日志（WebView2 系统弹窗兜底）。
+#[tauri::command]
+fn grant_mic_permission(window: tauri::WebviewWindow) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_STATE, ICoreWebView2Profile4,
+    };
+    use windows_core::{HSTRING, Interface};
+    let granted = std::cell::Cell::new(false);
+    let last_err_cell = std::cell::RefCell::new(String::new());
+    let granted_out = granted.clone();
+    let last_err_out = last_err_cell.clone();
+    window
+        .with_webview(move |webview| unsafe {
+            // MICROPHONE=1、ALLOW=1（COREWEBVIEW2_PERMISSION_KIND/STATE 的 SDK 枚举值）
+            match webview.controller().cast::<ICoreWebView2Profile4>() {
+                Ok(profile) => {
+                    for origin in ["http://tauri.localhost", "http://127.0.0.1:1430"] {
+                        if let Err(e) = profile.SetPermissionState(
+                            COREWEBVIEW2_PERMISSION_KIND(1),
+                            &HSTRING::from(origin),
+                            COREWEBVIEW2_PERMISSION_STATE(1),
+                            None, // 完成回调可空，调用同步生效
+                        ) {
+                            *last_err_cell.borrow_mut() =
+                                format!("SetPermissionState({origin}) failed: {e}");
+                        } else {
+                            granted.set(true);
+                        }
+                    }
+                }
+                Err(e) => {
+                    *last_err_cell.borrow_mut() =
+                        format!("cast to ICoreWebView2Profile4 failed: {e}")
+                }
+            }
+        })
+        .map_err(|e| format!("with_webview failed: {e}"))?;
+    if granted_out.get() {
+        Ok(())
+    } else {
+        let msg = last_err_out.into_inner();
+        Err(if msg.is_empty() {
+            "grant_mic_permission: no origin granted".to_string()
+        } else {
+            msg
+        })
+    }
+}
+
+/// 语音输入转写：上传 WAV 字节（b64）到本地 ASR 服务，返回 JSON {"text", "elapsed_s", "audio_s"}。
+#[tauri::command]
+async fn asr_transcribe(url: String, wav_b64: String) -> Result<String, String> {
+    use base64::Engine;
+    let wav = base64::engine::general_purpose::STANDARD
+        .decode(&wav_b64)
+        .map_err(|e| format!("wav base64 解码失败: {e}"))?;
+    let base = url.trim().trim_end_matches('/');
+    let endpoint = if base.ends_with("/transcribe") {
+        base.to_string()
+    } else {
+        format!("{base}/transcribe")
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(endpoint)
+        .header("Content-Type", "application/octet-stream")
+        .body(wav)
+        .send()
+        .await
+        .map_err(|e| format!("连接 ASR 服务失败: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    Ok(text)
+}
+
 /// 桌面感知：抓取当前前台窗口画面（WGC 进程级），返回 JPEG base64 与窗口信息。
 #[tauri::command]
 fn capture_window() -> Result<capture::CaptureResult, String> {
@@ -1032,6 +1116,8 @@ fn main() {
             pet_post_json,
             pet_chat_direct,
             pet_tts_sbv2,
+            grant_mic_permission,
+            asr_transcribe,
             capture_window,
             get_system_context,
             pet_model_upload,
@@ -1042,6 +1128,12 @@ fn main() {
             #[cfg(debug_assertions)]
             if let Some(w) = app.get_webview_window("main") {
                 w.open_devtools();
+            }
+            // 语音输入：启动即预授予麦克风权限（失败仅记日志，WebView2 弹窗兜底）
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(e) = grant_mic_permission(w) {
+                    eprintln!("grant_mic_permission: {e}");
+                }
             }
             // 全局快捷键 Ctrl+Shift+P 切换点击穿透（穿透开启后窗口收不到事件，只能靠它切回）
             app.global_shortcut().on_shortcut(

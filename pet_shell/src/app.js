@@ -878,6 +878,220 @@ async function sendChat(text, opts = {}) {
   }
 }
 
+// ---------- 语音输入（本地 ASR @ 127.0.0.1:5055，whisper @ NPU） ----------
+
+const ASR_DEFAULT_URL = "http://127.0.0.1:5055";
+const ASR_MAX_MS = 30000; // 硬上限
+const ASR_SILENCE_MS = 1200; // 说话后静音自动截止
+const ASR_PRESPEECH_MAX_MS = 8000; // 一直没检测到说话时提前放弃
+const ASR_AUTO_SEND_MS = 500; // 识别结果入框后自动发送延迟（点击输入框/键盘可取消）
+
+let micRecording = false;
+let micAutoSendTimer = null;
+let micCancelAutoSend = false;
+
+const micBtn = $("mic-btn");
+
+function asrUrl() {
+  const u = fileConfig && fileConfig.asr && fileConfig.asr.url;
+  return String(u || "").trim() || ASR_DEFAULT_URL;
+}
+
+// AudioWorklet 采集处理器：mic-worklet.js（真实文件走 'self'，CSP 无需放开 blob:）
+const MIC_WORKLET_URL = "mic-worklet.js";
+
+let micStream = null;
+let micContext = null;
+let micSource = null;
+let micWorklet = null;
+let micRaw16k = [];
+let micSpeechSeen = false;
+let micSilenceMs = 0;
+let micStartTime = 0;
+let micCapTimer = null;
+let micNoiseFloor = 0.01; // 自适应底噪初始值（约 -40dB）
+
+// 触发即授予权限（启动时在 app 初始化里调用一次）
+function grantMicPermission() {
+  invoke()("grant_mic_permission").catch((e) => console.warn("[mic] 预授权失败（弹窗兜底）:", e));
+}
+
+async function startMicRecording() {
+  if (micRecording) return;
+  micRecording = true;
+  micRaw16k = [];
+  micSpeechSeen = false;
+  micSilenceMs = 0;
+  micStartTime = Date.now();
+  micNoiseFloor = 0.01;
+  micBtn.classList.add("recording");
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+    });
+    micContext = new AudioContext();
+    if (!micContext.audioWorklet) throw new Error("AudioWorklet 不支持");
+    micSource = micContext.createMediaStreamSource(micStream);
+    await micContext.audioWorklet.addModule(MIC_WORKLET_URL);
+    micWorklet = new AudioWorkletNode(micContext, "pet-mic-collector");
+    micWorklet.port.onmessage = onMicAudioChunk;
+    micSource.connect(micWorklet);
+    micCapTimer = setTimeout(stopMicRecording, ASR_MAX_MS);
+  } catch (e) {
+    console.warn("[mic] 采集启动失败:", e);
+    micRecording = false;
+    micBtn.classList.remove("recording");
+    showBubble();
+    queueType("麦克风不可用……检查权限或录音设备。");
+    scheduleBubbleHide();
+  }
+}
+
+function stopMicRecording() {
+  if (!micRecording) return;
+  micRecording = false;
+  clearTimeout(micCapTimer);
+  micBtn.classList.remove("recording");
+  if (micWorklet) { try { micWorklet.disconnect(); micWorklet.port.close(); } catch (e) {} }
+  if (micSource) { try { micSource.disconnect(); } catch (e) {} }
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); }
+  if (micContext) { try { micContext.close(); } catch (e) {} }
+  micStream = micContext = micSource = micWorklet = null;
+
+  const hadSpeech = micSpeechSeen;
+  const chunks = micRaw16k;
+  micRaw16k = [];
+  if (!hadSpeech || chunks.length < 1600) return; // 没说话 / <0.1s：静默丢弃
+  transcribeAndFill(encodeWavPcm16(chunks, 16000));
+}
+
+// 采集回调：降采样到 16kHz（滑动均值抗混叠）并入列，每 10ms 做一次 VAD
+function onMicAudioChunk(ev) {
+  const chunk = ev.data;
+  const sr = micContext ? micContext.sampleRate : 48000;
+  const step = Math.max(1, Math.round(sr / 16000));
+  for (let i = 0; i + step <= chunk.length; i += step) {
+    let s = 0;
+    for (let j = 0; j < step; j++) s += chunk[i + j];
+    micRaw16k.push(s / step);
+  }
+  if (micRaw16k.length >= 160) {
+    const win = micRaw16k.slice(-160); // 最近 10ms
+    let sum = 0;
+    for (const v of win) sum += v * v;
+    const rms = Math.sqrt(sum / win.length);
+    const thr = Math.max(micNoiseFloor * 5, 0.01);
+    if (rms > thr) {
+      micSpeechSeen = true;
+      micSilenceMs = 0;
+    } else {
+      micSilenceMs += 10;
+      micNoiseFloor = micNoiseFloor * 0.98 + Math.min(rms, 0.02) * 0.02; // 静音期缓慢跟踪底噪
+      if (micSpeechSeen && micSilenceMs >= ASR_SILENCE_MS) {
+        stopMicRecording();
+        return;
+      }
+    }
+    if (!micSpeechSeen && Date.now() - micStartTime > ASR_PRESPEECH_MAX_MS) {
+      stopMicRecording();
+    }
+  }
+}
+
+// PCM16 单声道 WAV → base64（44 字节头 + 数据）
+function encodeWavPcm16(samples, sampleRate) {
+  const n = samples.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const dv = new DataView(buf);
+  const wstr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  wstr(0, "RIFF"); dv.setUint32(4, 36 + n * 2, true); wstr(8, "WAVE");
+  wstr(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+  dv.setUint16(22, 1, true); dv.setUint32(24, sampleRate, true);
+  dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  wstr(36, "data"); dv.setUint32(40, n * 2, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    dv.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    o += 2;
+  }
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+// 转写并回填输入框，0.5s 后自动发送（点击输入框/键盘/再点麦克风可取消）
+async function transcribeAndFill(wavB64) {
+  showBubble();
+  queueType("…");
+  try {
+    const raw = await invoke()("asr_transcribe", { url: asrUrl(), wavB64 });
+    const data = JSON.parse(raw);
+    const text = String((data && data.text) || "").trim();
+    typeQueue.length = 0;
+    bubbleText.textContent = "";
+    if (!text) {
+      queueType("没听清，再说一次？");
+      scheduleBubbleHide();
+      return;
+    }
+    chatInput.value = text;
+    micCancelAutoSend = false;
+    chatInput.classList.add("mic-pending");
+    chatInput.focus();
+    micAutoSendTimer = setTimeout(() => {
+      micAutoSendTimer = null; // 已触发：下次点击麦克风不再走"取消"分支
+      chatInput.classList.remove("mic-pending");
+      if (!micCancelAutoSend && chatInput.value === text) {
+        if (sending) return; // 回复进行中：只回填不自动发，用户回车再发
+        sendChat(text).catch(() => {});
+      }
+    }, ASR_AUTO_SEND_MS);
+  } catch (e) {
+    typeQueue.length = 0;
+    bubbleText.textContent = "";
+    const msg = String((e && e.message) || e || "");
+    queueType(/连接 ASR 服务失败/.test(msg)
+      ? "语音服务没起来……重启桌宠或 start_all 后再试。"
+      : "语音识别出错：" + msg.slice(0, 40));
+    scheduleBubbleHide();
+  }
+}
+
+micBtn.addEventListener("click", () => {
+  if (micRecording) {
+    stopMicRecording();
+    return;
+  }
+  if (micAutoSendTimer) { // 待发送阶段：点击 = 取消自动发送
+    clearTimeout(micAutoSendTimer);
+    micAutoSendTimer = null;
+    micCancelAutoSend = true;
+    chatInput.classList.remove("mic-pending");
+    return;
+  }
+  startMicRecording();
+});
+
+// 用户在输入框动手 = 取消自动发送
+chatInput.addEventListener("keydown", () => {
+  if (micAutoSendTimer) {
+    clearTimeout(micAutoSendTimer);
+    micAutoSendTimer = null;
+    micCancelAutoSend = true;
+    chatInput.classList.remove("mic-pending");
+  }
+});
+chatInput.addEventListener("mousedown", () => {
+  if (micAutoSendTimer) {
+    clearTimeout(micAutoSendTimer);
+    micAutoSendTimer = null;
+    micCancelAutoSend = true;
+    chatInput.classList.remove("mic-pending");
+  }
+});
+
 // ---------- 交互 ----------
 
 // 右下角手柄：拖动调整窗口（模型）大小
@@ -1225,6 +1439,7 @@ let lastMouseMove = 0;
 // 无法依赖"出界事件"回正，改用看门狗：无新事件 1.5s 自动回正。
 document.addEventListener("mousemove", (e) => {
   lastMouseMove = Date.now();
+  if (micRecording) return; // 录音中暂停视线跟随（集中在输入框交互上）
   if (recenterAnim) { // 鼠标一动，立即打断回正动画
     clearInterval(recenterAnim);
     recenterAnim = null;
@@ -1288,6 +1503,7 @@ function flashExpression(name, ms = 3500) {
 }
 
 function gazeWander() {
+  if (micRecording) return; // 录音中不随机游移视线
   if (Date.now() - lastMouseMove < 8000) return; // 用户在动鼠标时不抢视线
   const r = document.getElementById("live2d-canvas").getBoundingClientRect();
   live2dModel.focus(Math.random() * r.width, Math.random() * r.height);
@@ -1317,6 +1533,7 @@ setInterval(() => {
     activeProfile.coinSway &&
     live2dModel &&
     !sending &&
+    !micRecording &&
     !longIdleActive &&
     Date.now() - lastChatAt > LONG_IDLE_TRIGGER_MS
   ) {
@@ -1375,7 +1592,7 @@ function scheduleIdleAction() {
   const delay = 25000 + Math.random() * 35000; // 25~60s
   setTimeout(() => {
     try {
-      if (live2dModel && !sending && !longIdleActive) {
+      if (live2dModel && !sending && !micRecording && !longIdleActive) {
         const actions = currentIdleActions();
         const [name, act] = actions[Math.floor(Math.random() * actions.length)];
         act();
@@ -1756,6 +1973,7 @@ setTimeout(reportStatus, 8000); // 启动后稍候上报首包
 (async () => {
   await loadFileConfig();
   applyProactiveConfig(); // 主动对话参数覆盖（须在 loadFileConfig 之后）
+  grantMicPermission(); // 语音输入：预授予 WebView2 麦克风权限（失败弹窗兜底）
   // 主动对话/桌面感知配置已收口插件控制页，清理全部旧本地键
   for (const k of [
     "pet_proactive",

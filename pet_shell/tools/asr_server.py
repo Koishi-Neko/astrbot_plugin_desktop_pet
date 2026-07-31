@@ -1,11 +1,13 @@
-"""桌宠语音输入 ASR 服务（whisper-small int8 @ Intel NPU）。
+"""桌宠语音输入 ASR 服务（whisper-large-v3-turbo-fp16 @ Intel NPU）。
 
 OpenVINO GenAI WhisperPipeline 封装为本地 HTTP 服务：
   GET  /health      -> {"status": "ok", "device": "NPU", "model": "..."}
   POST /transcribe  -> body 为 16kHz 单声道 WAV 字节，返回 {"text": "..."}
 
-模型加载：启动时预载（首次 NPU 编译需数分钟，之后走 ze_intel_npu_cache 秒载）；
+模型加载：启动时预载（首次 NPU 编译约 4 分钟，之后走 ze_intel_npu_cache 秒载）；
 NPU 加载失败自动回退 CPU 并在 /health 标注。
+默认模型为 large-v3-turbo-fp16（2026-07-31 验证：NPU 中文/英文均正确，
+中文 7.15s 音频 ~1.65s）；whisper-small-int8 在 NPU 上中文解码损坏，勿改回。
 """
 
 import io
@@ -23,11 +25,21 @@ import openvino_genai as ov_genai
 
 MODEL_DIR = os.environ.get(
     "ASR_MODEL_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper-small-int8-ov"),
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "models",
+        "whisper-large-v3-turbo-fp16-ov",
+    ),
 )
 HOST = os.environ.get("ASR_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ASR_PORT", "5055"))
 DEVICE = os.environ.get("ASR_DEVICE", "NPU")
+# 显式锁定识别语言：openvino-genai WhisperPipeline 跨请求持有语言状态
+# （EN 请求后中文会被"翻译"成英文，实测粘性 bug），默认固定 <|zh|>；
+# 语言键必须是模型 generation_config.json 里 lang_to_id 的 token 形式
+# （<|zh|>/<|en|>/<|ja|>…，用 "zh"/"chinese" 会报 "'language' not in lang_to_id"），
+# 留空 = 自动检测（仅当换纯英文使用场景时改，且注意粘性 bug 仍会存在）。
+LANGUAGE = os.environ.get("ASR_LANGUAGE", "<|zh|>")
 
 app = FastAPI()
 pipe = None
@@ -88,7 +100,10 @@ async def transcribe(request: Request):
         return {"text": ""}
     t0 = time.time()
     try:
-        result = pipe.generate(data.tolist())
+        options = {}
+        if LANGUAGE:
+            options["language"] = LANGUAGE
+        result = pipe.generate(data.tolist(), **options)
         text = str(result).strip()
     except Exception as e:
         return JSONResponse({"error": f"inference failed: {e}"}, status_code=500)
