@@ -551,6 +551,38 @@ class DesktopPetBridge(Star):
 
     # ---------- 管道模式：给桌宠 webchat 会话追加输出格式要求 ----------
 
+    # priority=10：先于 LivingMemory（priority 0）执行。LivingMemory 在 on_llm_request
+    # 里把用户消息连同发送者信息存入自己的会话库，此时若发送者仍是 webchat 的
+    # "desktop_pet"，其记忆反思（总结 prompt 强制使用消息前缀昵称）会把 "desktop_pet"
+    # 当主人昵称写进长期记忆——该问题曾两次修复（身份改写/数据清洗）均因晚于存储而复发。
+    @filter.on_llm_request(priority=10)
+    async def pre_fix_pet_sender(self, event: AstrMessageEvent, req: ProviderRequest):
+        umo = event.unified_msg_origin or ""
+        sid = self._pet_session_id()
+        # 桌宠会话 umo 形如 webchat:FriendMessage:webchat!{username}!{conversation_id}
+        if umo.startswith("webchat:") and umo.endswith(f"!{sid}"):
+            qq = self._master_qq() or "master"
+            name = self._master_name() or "主人"
+            try:
+                from astrbot.core.platform.astrbot_message import MessageMember
+                mo = getattr(event, "message_obj", None)
+                if mo is not None and getattr(mo, "sender", None) is not None:
+                    mo.sender = MessageMember(qq, name)
+            except Exception as e:
+                logger.warning(f"[desktop_pet] pre-fix pet sender failed: {e}")
+
+    @staticmethod
+    def _restore_pet_sender(event: AstrMessageEvent, sid: str) -> None:
+        """还原发送者：助手消息入库仍用原 sender（总结 prompt 靠 [Bot:] 前缀区分自己），
+        仅用户消息以主人身份入库。"""
+        try:
+            from astrbot.core.platform.astrbot_message import MessageMember
+            mo = getattr(event, "message_obj", None)
+            if mo is not None and getattr(mo, "sender", None) is not None:
+                mo.sender = MessageMember(sid, sid)
+        except Exception as e:
+            logger.warning(f"[desktop_pet] restore pet sender failed: {e}")
+
     # priority=-10：必须后于记忆类插件（如 LivingMemory，默认 0）等注入型插件执行，
     # 否则其注入内容（可能含旧的 desktop_pet 身份文本）绕过身份改写
     @filter.on_llm_request(priority=-10)
@@ -560,6 +592,7 @@ class DesktopPetBridge(Star):
         # 桌宠会话 umo 形如 webchat:FriendMessage:webchat!{username}!{conversation_id}
         if umo.startswith("webchat:") and umo.endswith(f"!{sid}"):
             self._rewrite_pet_identity(req)
+            self._restore_pet_sender(event, sid)
             tpl = EMOTION_INSTRUCTION_TTS if self._tts_enabled() else EMOTION_INSTRUCTION
             req.system_prompt = (req.system_prompt or "") + self._master_identity_note(
                 for_pet=True
