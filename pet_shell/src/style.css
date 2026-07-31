@@ -71,6 +71,28 @@ body {
   background: rgba(255, 143, 191, 1);
 }
 
+/* 输入框开合箭头（模型区左下方，与气泡粉点同方位居下） */
+#input-toggle {
+  position: absolute;
+  bottom: 50px;
+  left: 16%;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255, 143, 191, 0.55);
+  color: #fff;
+  font-size: 11px;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  z-index: 70;
+  transition: background 0.15s;
+}
+
+#input-toggle:hover {
+  background: rgba(255, 143, 191, 1);
+}
+
 /* 桌宠立绘（顶部 24% 为气泡带，模型在其下渲染，永不重叠） */
 #pet {
   position: absolute;

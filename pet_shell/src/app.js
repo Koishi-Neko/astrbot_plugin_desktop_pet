@@ -705,6 +705,16 @@ document.addEventListener("mouseup", () => {
   }
 })();
 
+// 输入框开合收口：切 hidden + 同步左下箭头方向 + 打开时聚焦
+function setInputBar(open) {
+  const willOpen = typeof open === "boolean" ? open : inputBar.classList.contains("hidden");
+  inputBar.classList.toggle("hidden", !willOpen);
+  $("input-toggle").textContent = willOpen ? "▼" : "▲";
+  if (willOpen) chatInput.focus();
+}
+
+$("input-toggle").addEventListener("click", () => setInputBar());
+
 // 单击立绘：戳一戳（随机动作/表情反馈）；双击：开合输入框
 let dragMoved = false;
 avatar.parentElement.addEventListener("mousedown", () => (dragMoved = false));
@@ -712,10 +722,7 @@ avatar.parentElement.addEventListener("mousemove", () => (dragMoved = true));
 avatar.parentElement.addEventListener("mouseup", () => {
   if (!dragMoved) poke();
 });
-avatar.parentElement.addEventListener("dblclick", () => {
-  inputBar.classList.toggle("hidden");
-  if (!inputBar.classList.contains("hidden")) chatInput.focus();
-});
+avatar.parentElement.addEventListener("dblclick", () => setInputBar());
 
 // 戳一戳：随机动作或短暂表情（动作/表情池按当前模型档案）
 function poke() {
@@ -844,10 +851,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-$("menu-toggle-input").addEventListener("click", () => {
-  inputBar.classList.toggle("hidden");
-  if (!inputBar.classList.contains("hidden")) chatInput.focus();
-});
+$("menu-toggle-input").addEventListener("click", () => setInputBar());
 
 // 点击穿透：JS 侧记录状态，与 Rust 回调（快捷键/托盘）保持同步
 let clickThroughOn = false;

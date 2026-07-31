@@ -88,6 +88,7 @@ The bundled default model **Momose Hiyori** is Live2D's official free sample (li
 | --- | --- |
 | Single-click model | Poke — random motion/expression |
 | Double-click model | Toggle input bar; Enter to send |
+| Arrow button (bottom-left) | Toggle input bar (below the bubble dot) |
 | Drag model | Move window |
 | Drag bottom-right handle | Resize window & model (remembered) |
 | Right-click | Chat / switch model / click-through / settings / quit |
