@@ -886,18 +886,58 @@ const ASR_SILENCE_MS = 1200; // 说话后静音自动截止
 const ASR_PRESPEECH_MAX_MS = 8000; // 一直没检测到说话时提前放弃
 const ASR_AUTO_SEND_MS = 500; // 识别结果入框后自动发送延迟（点击输入框/键盘可取消）
 
-let micRecording = false;
-let micAutoSendTimer = null;
-let micCancelAutoSend = false;
+// 语音输入远程配置（插件控制页编辑下发；独立模式无插件时用本地偏好）
+// 优先级：远程 > localStorage（壳端设置面板）> config.local.json > 默认
+let asrRemoteCfg = null; // {voice_input_enabled, asr_url, fetchedAt}
+const ASR_REMOTE_TTL_MS = 120_000;
 
-const micBtn = $("mic-btn");
+async function fetchAsrConfig(force = false) {
+  if (petMode() === "standalone") {
+    asrRemoteCfg = null;
+    return asrRemoteCfg;
+  }
+  if (!force && asrRemoteCfg && Date.now() - asrRemoteCfg.fetchedAt < ASR_REMOTE_TTL_MS) {
+    return asrRemoteCfg;
+  }
+  try {
+    const cfg = loadConfig();
+    if (!cfg.apiKey) return asrRemoteCfg;
+    const text = await invoke()("pet_get", {
+      url: cfg.baseUrl + "/desktop_pet/pet/asr_config",
+      apiKey: cfg.apiKey,
+    });
+    const d = JSON.parse(text);
+    if (d && typeof d.asr_url === "string") {
+      asrRemoteCfg = {
+        voice_input_enabled: d.voice_input_enabled !== false,
+        asr_url: d.asr_url.trim() || ASR_DEFAULT_URL,
+        fetchedAt: Date.now(),
+      };
+    }
+  } catch (e) {
+    console.warn("[asr] 拉取远程语音配置失败（沿用旧值/默认）:", e);
+  }
+  return asrRemoteCfg;
+}
+
+function voiceInputEnabled() {
+  if (asrRemoteCfg) return asrRemoteCfg.voice_input_enabled;
+  return localStorage.getItem("pet_voice_input") !== "0";
+}
 
 function asrUrl() {
+  if (asrRemoteCfg) return asrRemoteCfg.asr_url;
   const ls = localStorage.getItem("pet_asr_url");
   if (ls !== null) return ls.trim() || ASR_DEFAULT_URL;
   const u = fileConfig && fileConfig.asr && fileConfig.asr.url;
   return String(u || "").trim() || ASR_DEFAULT_URL;
 }
+
+let micRecording = false;
+let micAutoSendTimer = null;
+let micCancelAutoSend = false;
+
+const micBtn = $("mic-btn");
 
 // AudioWorklet 采集处理器：mic-worklet.js（真实文件走 'self'，CSP 无需放开 blob:）
 const MIC_WORKLET_URL = "mic-worklet.js";
@@ -921,6 +961,7 @@ function grantMicPermission() {
 // 语音服务健康探测：未就绪时按钮灰态（点击给提示），每 30s 自动重试至就绪
 let asrReady = false;
 let asrHealthTimer = null;
+let asrState = null; // 上报用：{ready, loading, device, model, url, error}
 
 async function probeAsrHealth() {
   try {
@@ -928,15 +969,18 @@ async function probeAsrHealth() {
     const h = JSON.parse(raw);
     if (h && h.status === "ok") {
       asrReady = true;
+      asrState = { ready: true, loading: false, device: h.device, model: h.model, url: asrUrl(), error: null };
       micBtn.classList.remove("asr-off");
       micBtn.title = "语音输入（点击开始/结束录音）";
     } else {
       asrReady = false;
+      asrState = { ready: false, loading: false, device: null, model: null, url: asrUrl(), error: String((h && h.load_error) || "未知") };
       micBtn.classList.add("asr-off");
       micBtn.title = "语音服务异常：" + String((h && h.load_error) || "未知");
     }
   } catch (e) {
     asrReady = false;
+    asrState = { ready: false, loading: true, device: null, model: null, url: asrUrl(), error: null };
     micBtn.classList.add("asr-off");
     micBtn.title = "语音服务未就绪（首次加载约 4 分钟，自动重试中）";
   }
@@ -948,6 +992,12 @@ async function probeAsrHealth() {
 
 async function startMicRecording() {
   if (micRecording) return;
+  if (!voiceInputEnabled()) {
+    showBubble();
+    queueType("语音输入已关闭……去插件控制页开启一下试试。");
+    scheduleBubbleHide();
+    return;
+  }
   if (!asrReady) {
     showBubble();
     queueType("语音服务还没准备好……首次启动要加载约 4 分钟，稍后再试。");
@@ -1985,6 +2035,7 @@ async function reportStatus() {
     const cfg = loadConfig();
     if (!cfg.apiKey) return;
     await fetchSceneConfig(); // TTL 守卫，顺带让开关/间隔跟随控制页变更
+    await fetchAsrConfig(); // TTL 守卫，顺带让语音开关/地址跟随控制页变更
     const sp = sceneParams();
     await invoke()("pet_post_json", {
       url: cfg.baseUrl + "/desktop_pet/pet/status_report",
@@ -1995,6 +2046,7 @@ async function reportStatus() {
         scene_interval_min: sp.intervalMin,
         events: window.__proactiveLog(),
         last_scene: lastSceneResult,
+        asr: asrState,
       },
     });
   } catch (e) {
@@ -2013,6 +2065,7 @@ setTimeout(reportStatus, 8000); // 启动后稍候上报首包
   await loadFileConfig();
   applyProactiveConfig(); // 主动对话参数覆盖（须在 loadFileConfig 之后）
   grantMicPermission(); // 语音输入：预授予 WebView2 麦克风权限（失败弹窗兜底）
+  await fetchAsrConfig(true); // 语音输入：先拉远程配置（开关/地址），再按生效地址探测
   probeAsrHealth(); // 语音输入：服务健康探测（未就绪按钮灰态 + 30s 自动重试）
   // 主动对话/桌面感知配置已收口插件控制页，清理全部旧本地键
   for (const k of [

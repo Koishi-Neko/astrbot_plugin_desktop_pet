@@ -102,5 +102,19 @@
         "type": "int",
         "default": 30,
         "invisible": true
+    },
+    "voice_input_enabled": {
+        "description": "语音输入总开关",
+        "hint": "开启后桌宠输入栏的麦克风按钮可用（本地 ASR 服务 127.0.0.1:5055）。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+    },
+    "asr_url": {
+        "description": "语音识别服务地址",
+        "hint": "壳端本地 ASR 服务（whisper @ NPU）的地址，默认 http://127.0.0.1:5055。",
+        "type": "string",
+        "default": "http://127.0.0.1:5055",
+        "invisible": true
     }
 }

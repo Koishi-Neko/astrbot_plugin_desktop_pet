@@ -63,6 +63,24 @@
       </section>
 
       <section class="card">
+        <div class="card-title">语音输入</div>
+        <div class="warn">桌宠输入栏的麦克风按钮（本地 ASR 服务，whisper @ NPU）。开关与地址由壳端远程拉取，约 2 分钟内生效；运行状态来自桌宠心跳上报。</div>
+        <div id="asr-state" class="kv">加载中…</div>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="voice-input-enabled" />
+          <span>启用语音输入</span>
+        </label>
+        <label class="row">
+          <span class="label">识别服务地址</span>
+          <input type="text" id="asr-url" placeholder="http://127.0.0.1:5055" spellcheck="false" />
+        </label>
+        <div class="row buttons">
+          <button id="btn-save-asr" class="btn primary">保存配置</button>
+          <span id="asr-save-msg" class="msg"></span>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-title">主动对话 / 桌面感知动态</div>
         <div id="pet-report" class="kv">加载中…</div>
       </section>

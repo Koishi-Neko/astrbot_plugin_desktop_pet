@@ -60,6 +60,7 @@ input[type="range"] { flex: 1; max-width: 300px; }
 .kv { font-size: 13px; line-height: 1.9; white-space: pre-wrap; }
 .kv .ok { color: #2a9d52; }
 .kv .bad { color: #d33; }
+.kv .warn-color { color: #c07b00; }
 .msg { font-size: 12px; color: #888; }
 .warn { font-size: 12px; color: #c07b00; margin: 4px 0; }
 .mono { font-family: Consolas, monospace; font-size: 13px; width: 40px; }

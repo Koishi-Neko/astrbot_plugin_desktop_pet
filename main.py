@@ -92,9 +92,16 @@ SCENE_CONFIG_KEYS = (
     "scene_interval_min",
 )
 
+# 语音输入（壳端远程拉取，控制页编辑；独立模式无插件时壳端设置面板兜底）
+ASR_CONFIG_KEYS = (
+    "voice_input_enabled",
+    "asr_url",
+)
+
 DEFAULT_PROACTIVE_ENABLED = True
 DEFAULT_SCENE_ENABLED = False
 DEFAULT_SCENE_INTERVAL_MIN = 30
+DEFAULT_ASR_URL = "http://127.0.0.1:5055"
 DEFAULT_SCENE_BLOCKLIST = (
     "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, "
     "qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, "
@@ -132,6 +139,12 @@ class DesktopPetBridge(Star):
             self.pet_scene_config,
             ["GET"],
             "桌宠壳远程拉取桌面感知配置（视觉模型/禁止抓取名单）",
+        )
+        self.context.register_web_api(
+            "desktop_pet/pet/asr_config",
+            self.pet_asr_config,
+            ["GET"],
+            "桌宠壳远程拉取语音输入配置（开关/ASR 地址）",
         )
         self.context.register_web_api(
             "desktop_pet/pet/status_report",
@@ -181,6 +194,12 @@ class DesktopPetBridge(Star):
             self.page_scene_config,
             ["GET", "POST"],
             "桌宠控制页：读写桌面感知配置",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/asr_config",
+            self.page_asr_config,
+            ["GET", "POST"],
+            "桌宠控制页：读写语音输入配置（开关/ASR 地址）",
         )
         logger.info(
             "[desktop_pet] web api registered: desktop_pet/pet/*, desktop_pet/page/*"
@@ -269,12 +288,25 @@ class DesktopPetBridge(Star):
             "scene_interval_min": self._scene_interval_min(),
         }
 
+    def _asr_payload(self) -> dict:
+        return {
+            "voice_input_enabled": self._voice_input_enabled(),
+            "asr_url": str(self.config.get("asr_url") or DEFAULT_ASR_URL).strip(),
+        }
+
+    def _voice_input_enabled(self) -> bool:
+        return bool(self.config.get("voice_input_enabled", True))
+
     async def pet_scene_config(self):
         """壳端拉取主动对话/桌面感知配置（服务侧统一下发）。"""
         return self._scene_payload()
 
+    async def pet_asr_config(self):
+        """壳端拉取语音输入配置（开关/ASR 地址）。"""
+        return self._asr_payload()
+
     async def pet_status_report(self):
-        """壳端状态上报（主动对话/桌面感知监控），仅存内存，重启即清。"""
+        """壳端状态上报（主动对话/桌面感知/语音输入监控），仅存内存，重启即清。"""
         raw = await request.body()
         try:
             body = json.loads(raw.decode("utf-8")) if raw else {}
@@ -282,6 +314,7 @@ class DesktopPetBridge(Star):
             body = {}
         events = body.get("events")
         last_scene = body.get("last_scene")
+        asr = body.get("asr")
         self._shell_report = {
             "at": time.time(),
             "proactive_enabled": bool(body.get("proactive_enabled")),
@@ -289,6 +322,7 @@ class DesktopPetBridge(Star):
             "scene_interval_min": body.get("scene_interval_min"),
             "events": events[-20:] if isinstance(events, list) else [],
             "last_scene": last_scene if isinstance(last_scene, dict) else None,
+            "asr": asr if isinstance(asr, dict) else None,
         }
         return {"ok": True}
 
@@ -311,7 +345,7 @@ class DesktopPetBridge(Star):
             if os.path.exists(path):
                 with open(path, encoding="utf-8-sig") as f:
                     data = json.load(f)
-            for k in TTS_CONFIG_KEYS + PAGE_CONFIG_KEYS + SCENE_CONFIG_KEYS:
+            for k in TTS_CONFIG_KEYS + PAGE_CONFIG_KEYS + SCENE_CONFIG_KEYS + ASR_CONFIG_KEYS:
                 if k in self.config:
                     data[k] = self.config[k]
             with open(path, "w", encoding="utf-8") as f:
@@ -350,6 +384,8 @@ class DesktopPetBridge(Star):
             "default_persona": default_persona,
             "sbv2": await self._sbv2_status(),
             "scene": self._scene_payload(),
+            "asr": self._asr_payload(),
+            "asr_state": (self._shell_report or {}).get("asr"),
             "shell_report": self._shell_report,
             "shell_report_age_s": (
                 round(time.time() - self._shell_report["at"]) if self._shell_report else None
@@ -546,6 +582,25 @@ class DesktopPetBridge(Star):
                 return error_response("invalid value for scene_interval_min", status_code=400)
             self.config["scene_interval_min"] = v
             updated["scene_interval_min"] = v
+        self._persist_config()
+        return {"saved": True, "updated": updated}
+
+    async def page_asr_config(self):
+        if request.method == "GET":
+            return {
+                "voice_input_enabled": self._voice_input_enabled(),
+                "asr_url": str(self.config.get("asr_url") or DEFAULT_ASR_URL).strip(),
+            }
+        payload = await request.json(default={})
+        updated = {}
+        if "voice_input_enabled" in payload:
+            v = bool(payload["voice_input_enabled"])
+            self.config["voice_input_enabled"] = v
+            updated["voice_input_enabled"] = v
+        if "asr_url" in payload:
+            v = str(payload["asr_url"]).strip() or DEFAULT_ASR_URL
+            self.config["asr_url"] = v
+            updated["asr_url"] = v
         self._persist_config()
         return {"saved": True, "updated": updated}
 

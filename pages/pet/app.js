@@ -32,6 +32,24 @@ async function refreshStatus() {
       `QQ 日语配音：${s.qq_jp_dub_enabled ? "已启用" : "已禁用"}\n` +
       `默认人格：${esc(s.default_persona || "（未设置）")}`;
 
+    // 语音输入运行状态：配置以插件侧为准，运行态来自壳端心跳上报
+    const asrCfg = s.asr || {};
+    const asrSt = s.asr_state;
+    let asrLine;
+    if (!asrSt) {
+      asrLine = `<span class="bad">● 暂无上报</span>（桌宠未运行或版本过旧）`;
+    } else if (asrSt.ready) {
+      asrLine = `<span class="ok">● 就绪</span>  ${esc(asrSt.device || "")} ${esc(asrSt.model || "")}` +
+        (asrSt.url ? `  @${esc(asrSt.url)}` : "");
+    } else if (asrSt.loading) {
+      asrLine = `<span class="warn-color">● 加载中</span>  （首次约 4 分钟）`;
+    } else {
+      asrLine = `<span class="bad">● 异常</span>  ${esc(asrSt.error || "未知")}`;
+    }
+    $("asr-state").innerHTML =
+      `语音输入：${asrCfg.voice_input_enabled === false ? "已关闭" : "已启用"}\n` +
+      `识别服务：${asrLine}`;
+
     // 主动对话 / 桌面感知动态：配置以插件侧为准，运行态来自壳端心跳上报
     const r = s.shell_report;
     const scene = s.scene || {};
@@ -282,6 +300,32 @@ async function saveSceneConfig() {
   }
 }
 
+// ---------- 语音输入配置区 ----------
+
+async function loadAsrConfig() {
+  const cfg = await bridge.apiGet("page/asr_config");
+  $("voice-input-enabled").checked = cfg.voice_input_enabled !== false;
+  $("asr-url").value = cfg.asr_url || "";
+}
+
+async function saveAsrConfig() {
+  $("btn-save-asr").disabled = true;
+  $("asr-save-msg").textContent = "保存中…";
+  try {
+    await bridge.apiPost("page/asr_config", {
+      voice_input_enabled: $("voice-input-enabled").checked,
+      asr_url: $("asr-url").value.trim(),
+    });
+    $("asr-save-msg").textContent = "已保存，壳端约 2 分钟内拉取生效。";
+    refreshStatus();
+  } catch (e) {
+    $("asr-save-msg").textContent = "保存失败：" + e.message;
+  } finally {
+    $("btn-save-asr").disabled = false;
+    setTimeout(() => ($("asr-save-msg").textContent = ""), 5000);
+  }
+}
+
 // ---------- 试听 ----------
 
 async function testTts() {
@@ -312,6 +356,7 @@ $("btn-save-master").addEventListener("click", saveMasterConfig);
 $("btn-save-dub").addEventListener("click", saveJpDub);
 $("btn-save-persona").addEventListener("click", savePersona);
 $("btn-save-scene").addEventListener("click", saveSceneConfig);
+$("btn-save-asr").addEventListener("click", saveAsrConfig);
 $("btn-save").addEventListener("click", saveConfig);
 $("btn-test").addEventListener("click", testTts);
 $("tts-model").addEventListener("change", () => {
@@ -326,6 +371,6 @@ $("tts-length").addEventListener("input", () => {
 });
 
 await loadConfig();
-await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadPersonaConfig()]);
+await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadAsrConfig(), loadPersonaConfig()]);
 // 配置里的 style/speaker 选中值在模型列表加载后应用一次
 onModelChange();
