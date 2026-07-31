@@ -329,6 +329,8 @@ body {
   left: 50%;
   transform: translate(-50%, -50%);
   width: 270px;
+  max-height: calc(100vh - 12px);
+  overflow-y: auto;
   background: rgba(255, 255, 255, 0.99);
   border: 1px solid #ddd;
   border-radius: 12px;

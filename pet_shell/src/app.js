@@ -1395,7 +1395,6 @@ $("menu-settings").addEventListener("click", () => {
   $("cfg-scene-model").value = scfg.sceneModel;
   $("cfg-persona").value = scfg.persona;
   $("cfg-tts-url").value = scfg.ttsUrl;
-  $("cfg-asr-url").value = localStorage.getItem("pet_asr_url") || "";
   $("cfg-voice").checked = voiceEnabled;
   $("cfg-message").textContent = "";
   syncModeSections();
@@ -1420,8 +1419,6 @@ $("cfg-save").addEventListener("click", () => {
   } else {
     saveConfig($("cfg-base-url").value, $("cfg-api-key").value);
   }
-  localStorage.setItem("pet_asr_url", $("cfg-asr-url").value.trim());
-  probeAsrHealth(); // 地址可能变了，立即重探
   $("cfg-message").textContent = "已保存。";
 });
 
@@ -1460,16 +1457,21 @@ $("cfg-test").addEventListener("click", async () => {
   const apiKey = $("cfg-api-key").value.trim();
   $("cfg-message").textContent = "测试中…";
   try {
-    const text = await invoke()("pet_capabilities", { baseUrl, apiKey });
-    const c = JSON.parse(text);
+    // pet_capabilities 返回 Rust 结构体（Tauri 序列化为对象），直接使用
+    const c = await invoke()("pet_capabilities", { baseUrl, apiKey });
     const rows = ["✓ 连接成功"];
     rows.push(c.plugin ? "✓ plugin scope（插件路由）" : "✗ plugin scope：去面板 API Keys 补上");
     if (c.plugin) rows.push(c.provider ? "✓ 默认对话模型可用" : "✗ 默认对话模型不可用");
     rows.push(c.chat ? "✓ chat scope（对话）" : "✗ chat scope：去面板 API Keys 补上");
     rows.push(c.file ? "✓ file scope（桌面感知上传）" : "✗ file scope：去面板 API Keys 补上");
     $("cfg-message").textContent = rows.join("\n");
+    $("cfg-message").scrollIntoView({ block: "nearest" });
   } catch (err) {
-    $("cfg-message").textContent = `连接失败：${err}`;
+    const msg = String((err && err.message) || err || "");
+    if (/HTTP 40[13]/.test(msg)) $("cfg-message").textContent = "✗ API Key 无效或权限不足（需 plugin scope）";
+    else if (/连接失败/.test(msg)) $("cfg-message").textContent = "✗ 连不上 AstrBot：" + msg.slice(0, 80);
+    else $("cfg-message").textContent = "✗ " + msg.slice(0, 80);
+    $("cfg-message").scrollIntoView({ block: "nearest" });
   }
 });
 
