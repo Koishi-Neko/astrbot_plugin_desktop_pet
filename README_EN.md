@@ -38,6 +38,7 @@ A Live2D companion that lives on your Windows desktop, in two flavors:
 - **Live2D desktop companion**: transparent, borderless, always-on-top window with emotion expressions, poke reactions, eye tracking, random idle motions and a long-idle performance
 - **Multiple models, hot-swapped**: built-in Momose Hiyori plus Chino / Chino-Q (local); switch instantly from the right-click menu (remembered). Or **drag-and-drop any Cubism 3~5 model** onto the pet to use it (folder / `.model3.json` / `.zip`)
 - **Typewriter bubble + input bar**: replies carry 【emotion】 tags that switch expressions; Chinese bubble plus optional Japanese sentence-by-sentence voice
+- **Voice input**: mic button in the input bar — click to record, local ASR (whisper @ Intel NPU) transcribes and auto-sends; switch and server URL are configured on the control page
 - **Proactive chatter**: late-night reminders, welcome-back greetings, sedentary alerts; optional scene awareness comments on what's on your screen (with a capture blocklist — WeChat/QQ/DingTalk/Office are skipped by default)
 - **WebUI control page**: in AstrBot mode, all server-side settings live in one graphical page, applied on save
 
@@ -76,6 +77,7 @@ No AstrBot? No problem: **Settings → Mode → Standalone** makes the pet talk 
 | --- | --- | --- |
 | Chat / emotion tags / expression switching | ✅ | ✅ |
 | Japanese voice (needs local SBV2) | ✅ | ✅ (TTS URL configurable) |
+| Voice input (needs local ASR service) | ✅ (switch/URL on control page) | ✅ (default 5055, `config.local.json` overridable) |
 | Proactive chat / scene awareness | ✅ | ✅ (screenshots sent inline; vision model = chat model or separate) |
 | Conversation persona | WebUI control page | Settings "persona" text (built-in default if empty) |
 | Long-term memory (LivingMemory) | ✅ (optional plugin) | ❌ (not in V1) |
@@ -119,6 +121,16 @@ Replies then become "Chinese bubble + Japanese sentence-by-sentence voice + mout
 
 > `2.7.0-JP-Extra` models only support Japanese; install a standard trilingual model if you need Chinese voice.
 
+### Voice input (optional, local ASR)
+
+Open the input bar and hit the round mic button on the left to start recording (red breathing animation); tap again or pause for 1.2 s of silence to stop. The transcription is filled into the input bar and auto-sent after 0.5 s (click the input / press a key to cancel). Gaze-following and idle motions pause while recording.
+
+- **Engine**: local whisper (OpenVINO, Intel NPU by default). Recognized text goes through the full chat pipeline (persona / memory / emotion / Japanese dubbing) unchanged.
+- **Service**: a Windows-side process (`tools/asr_server.py`, FastAPI at `http://127.0.0.1:5055`) requiring Python 3.12 + `openvino-genai` and a whisper model (`whisper-large-v3-turbo-fp16-ov`, OpenVINO official export). First NPU compile takes ~4 minutes; the mic button stays grey and recovers automatically.
+- **Switch & URL**: in AstrBot mode, configure them in the control page "Voice input" card (the shell pulls within ~2 minutes); in standalone mode the default is `http://127.0.0.1:5055`, overridable via the `asr` block of `config.local.json`.
+- **Stopped by default**: the ASR service is not auto-started; run `pet_shell/tools/start_asr.ps1` (or double-click `start_asr.vbs`, idempotent; logs in `asr-npu\asr.log`) when needed. `stop_all.ps1` stops it too.
+- Recognition is locked to Chinese (English speech still transcribes correctly); audio never leaves your machine.
+
 ### Proactive chat & scene awareness
 
 Configured in the plugin control page (in standalone mode: the `proactive` block of `config.local.json`); the shell pulls changes within ~2 minutes:
@@ -143,6 +155,7 @@ The bundled default model **Momose Hiyori** is Live2D's official free sample (li
 | Single-click model | Poke — random motion/expression |
 | Double-click model | Toggle input bar; Enter to send |
 | Arrow button (bottom-left) | Toggle input bar (below the bubble dot) |
+| Round mic button (input bar, left) | Voice input: click to start/stop recording, auto-sends after recognition (grey = service not ready or disabled) |
 | Drag model | Move window |
 | Drag bottom-right handle | Resize window & model (remembered) |
 | Right-click | Chat / switch model / click-through / settings / quit |
@@ -188,6 +201,8 @@ You can preset configuration via `pet_shell/src/config.local.json` (gitignored; 
 - **No long-term memory in standalone mode**: by design in V1 (in-session history still works); for memory use AstrBot mode with LivingMemory.
 - **Live2D not showing (source build)**: make sure the three js files exist under `src/vendor/` (`npm run setup`); non-ASCII model paths or non-Cubism 3/4 models also fail to load.
 - **No voice**: all three must be on — control page TTS switch with SBV2 reachable and model/speaker selected, plus the shell's "Voice" toggle (in standalone mode check the TTS URL in settings).
+- **Mic button grey / no reaction**: the voice-input switch is off (control page "Voice input" card) or the ASR service isn't ready (first load takes ~4 minutes — run `start_asr.vbs`; hover the button for the reason).
+- **Wrong transcription**: recognition is locked to Chinese by default; it's a local whisper model, so heavy accents or noisy environments hurt accuracy — speak a little slower, or check that the service URL points at your local ASR service.
 - **Replies don't change expressions**: when the model omits emotion tags the pet falls back to "calm"; reinforce the format in the persona prompt.
 - **Remote AstrBot**: just change the address in settings. The API Key is the credential — do not expose port 6185 to the public internet.
 
