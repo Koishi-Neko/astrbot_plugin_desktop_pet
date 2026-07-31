@@ -1,6 +1,6 @@
 {
   "name": "astrbot-pet-shell",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "AstrBot 桌面桌宠壳（Tauri 2）",
   "scripts": {

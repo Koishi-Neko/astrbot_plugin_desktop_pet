@@ -2,7 +2,7 @@ name: astrbot_plugin_desktop_pet
 display_name: 桌面桌宠
 short_desc: Windows 桌面 Live2D 桌宠（可独立直连大模型，无需 AstrBot）
 desc: Windows 桌面 Live2D 桌宠：接 AstrBot 享受人格/记忆，或独立模式直连任意 OpenAI 兼容大模型；多模型热切换与拖拽上传、情绪表情、日语配音（SBV2）、主动搭话与桌面感知，配套 Tauri 桌宠壳
-version: 0.2.0
+version: 0.3.0
 author: Koishi-Neko
 repo: https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet
 social_link: https://github.com/Koishi-Neko
