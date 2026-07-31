@@ -15,6 +15,12 @@ import os
 import sys
 import time
 
+# pythonw（无控制台）下 sys.stdout/stderr 为 None，print 会直接崩——重定向到 null 保证安全
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 import numpy as np
 import soundfile as sf
 import uvicorn
