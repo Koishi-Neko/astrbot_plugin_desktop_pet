@@ -48,6 +48,40 @@ WebUI → 设置 → API Key → 新建，勾选 **plugin、chat、file** 三个
 
 服务侧进阶配置（TTS、主动对话、桌面感知、主人身份、QQ 配音）都在 **WebUI → 插件 → astrbot_plugin_desktop_pet → 控制页**，保存即生效。
 
+## 独立模式（无 AstrBot）
+
+不想部署 AstrBot 也能让桌宠工作：**设置面板 → 运行模式 → 独立模式**，桌宠改为直连任意 OpenAI 兼容的大模型 API（云端如 DeepSeek / Kimi，或本地 Ollama），对话、情绪表情、日语配音、主动对话/桌面感知全部可用，唯一区别是**没有长期记忆**（LivingMemory 等 AstrBot 插件能力，仅有本次运行的会话历史）。
+
+| 能力 | AstrBot 模式 | 独立模式 |
+| --- | --- | --- |
+| 聊天 / 情绪标签 / 表情切换 | ✅ | ✅ |
+| 日语配音（需本机部署 SBV2） | ✅ | ✅（TTS 地址可配） |
+| 主动对话 / 桌面感知 | ✅ | ✅（截图内联直传，视觉模型=对话模型或单独指定） |
+| 会话人格 | WebUI 控制页 | 设置面板「人格」文本（留空用内置默认） |
+| 长期记忆（LivingMemory） | ✅（可选插件） | ❌（V1 无） |
+| 配置入口 | WebUI 控制页 | 设置面板 / `config.local.json` |
+| 状态监控控制页 | ✅ | ❌ |
+
+配置（设置面板「独立模式」分区，或 `config.local.json` 的 `standalone` 节）：
+
+```json
+{
+  "mode": "standalone",
+  "standalone": {
+    "llm_base_url": "https://api.deepseek.com/v1",
+    "llm_api_key": "你的模型 API Key",
+    "llm_model": "deepseek-chat",
+    "persona": "可选，覆盖内置默认人格",
+    "tts_url": "http://localhost:5001",
+    "scene_model": "可选，桌面感知视觉模型，留空=用对话模型"
+  }
+}
+```
+
+> 切换回 AstrBot 模式：设置面板把模式改回去即可，两种模式互不影响、随时切换。
+
+**独立模式日语配音**：SBV2 默认监听 docker 网桥 `172.18.0.1:5000`，Windows 宿主不可达。本机（WSL 部署）用仓库 `pet_shell/tools/setup_sbv2_loopback.sh` 在 WSL 内起一个 socat 回环桥（`127.0.0.1:5001 → 172.18.0.1:5000`，systemd 常驻），Windows 经 `http://localhost:5001` 即可合成；TTS 地址留空则静默降级为纯文字气泡。
+
 ## 进阶玩法
 
 <!-- 控制页截图：docs/assets/control-page.png（控制页 + 桌宠同框） -->

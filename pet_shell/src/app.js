@@ -49,6 +49,66 @@ function saveConfig(baseUrl, apiKey) {
   localStorage.setItem("pet_api_key", apiKey.trim());
 }
 
+// ---------- 独立模式（无 AstrBot）配置 ----------
+
+// 运行模式：localStorage.pet_mode > fileConfig.mode > "astrbot"
+function petMode() {
+  const ls = localStorage.getItem("pet_mode");
+  if (ls === "astrbot" || ls === "standalone") return ls;
+  return fileConfig && fileConfig.mode === "standalone" ? "standalone" : "astrbot";
+}
+
+const STANDALONE_DEFAULTS = {
+  llm_base_url: "https://api.deepseek.com/v1",
+  llm_api_key: "",
+  llm_model: "deepseek-chat",
+  persona: "",
+  tts_url: "http://localhost:5001",
+  tts_model_id: 0,
+  tts_speaker_id: 0,
+  tts_style: "Neutral",
+  tts_length: 1.0,
+  scene_model: "", // 桌面感知视觉模型，留空 = 用对话模型
+};
+
+// 优先级：localStorage.pet_* > config.local.json standalone 节 > 内置默认
+function loadStandaloneConfig() {
+  const f = (fileConfig && fileConfig.standalone) || {};
+  const pick = (k, d) => {
+    const ls = localStorage.getItem(k);
+    return ls !== null ? ls : f[k] !== undefined ? f[k] : d;
+  };
+  const num = (k, d) => {
+    const v = Number(pick(k, d));
+    return Number.isFinite(v) ? v : d;
+  };
+  return {
+    llmBaseUrl: String(pick("pet_llm_base_url", STANDALONE_DEFAULTS.llm_base_url)).trim() || STANDALONE_DEFAULTS.llm_base_url,
+    llmApiKey: String(pick("pet_llm_api_key", "")).trim(),
+    llmModel: String(pick("pet_llm_model", STANDALONE_DEFAULTS.llm_model)).trim() || STANDALONE_DEFAULTS.llm_model,
+    persona: String(pick("pet_persona", "")),
+    ttsUrl: String(pick("pet_tts_url", STANDALONE_DEFAULTS.tts_url)).trim(),
+    ttsModelId: num("pet_tts_model_id", STANDALONE_DEFAULTS.tts_model_id),
+    ttsSpeakerId: num("pet_tts_speaker_id", STANDALONE_DEFAULTS.tts_speaker_id),
+    ttsStyle: String(pick("pet_tts_style", STANDALONE_DEFAULTS.tts_style)).trim() || "Neutral",
+    ttsLength: num("pet_tts_length", STANDALONE_DEFAULTS.tts_length),
+    sceneModel: String(pick("pet_scene_model", "")).trim(),
+  };
+}
+
+function saveStandaloneConfig() {
+  localStorage.setItem("pet_llm_base_url", $("cfg-llm-base-url").value.trim());
+  localStorage.setItem("pet_llm_api_key", $("cfg-llm-api-key").value.trim());
+  localStorage.setItem("pet_llm_model", $("cfg-llm-model").value.trim());
+  localStorage.setItem("pet_scene_model", $("cfg-scene-model").value.trim());
+  localStorage.setItem("pet_persona", $("cfg-persona").value);
+  localStorage.setItem("pet_tts_url", $("cfg-tts-url").value.trim());
+}
+
+// 内置默认人格（独立模式兜底；设置面板可覆盖）
+const STANDALONE_DEFAULT_PERSONA =
+  "你是桌宠「智乃」，一个住在主人 Windows 桌面上的活泼可爱的女孩子。你说话口语化、简短（1~3 句），带着活泼俏皮，偶尔有一点日式口癖。你会关心主人的作息和状态。";
+
 // ---------- 立绘 / 情绪 ----------
 
 // 情绪中文名 -> 立绘文件名（英文，避免资产协议对非 ASCII 文件名的兼容问题）
@@ -562,6 +622,152 @@ function parsePetReply(text) {
   };
 }
 
+// ---------- 独立模式对话（直连 OpenAI 兼容 API，无 AstrBot） ----------
+
+// 与插件 main.py 的 EMOTION_INSTRUCTION(_TTS) 保持一致（独立模式在本地拼 system prompt）
+const EMOTION_INSTRUCTION =
+  "\n\n【输出格式要求】每次回复必须以情绪标签开头，格式为「【情绪】正文」，" +
+  "情绪只能从以下列表中选择一个：平静、高兴、生气、害羞、惊讶、难过、疑惑、调皮。" +
+  "标签之后紧接回复正文。正文要口语化、简短（1~3 句），" +
+  "就像桌宠气泡里说的话。不要使用 markdown、列表或代码块，" +
+  "除开头的情绪标签外不要输出任何其他方括号标记。";
+
+const EMOTION_INSTRUCTION_TTS =
+  "\n\n【输出格式要求·必须严格遵守】每次回复必须同时包含以下三部分，缺一不可：" +
+  "①情绪标签：回复以「【情绪】」开头，情绪只能从以下列表中选择一个：平静、高兴、生气、害羞、惊讶、难过、疑惑、调皮；" +
+  "②中文正文：口语化、简短（1~3 句），就像桌宠气泡里说的话；" +
+  "③日语配音稿：以「【JP】」开头，紧接与中文正文意思对应的日语，必须是纯日语口语短句，" +
+  "用于语音合成朗读，不含中文、不含任何方括号标记。" +
+  "完整格式示例：「【高兴】今天也好想你呀，主人！【JP】今日も会いたかったよ、ご主人様！」" +
+  "禁止省略【JP】部分。不要使用 markdown、列表或代码块，" +
+  "除开头的情绪标签和【JP】外不要输出任何其他方括号标记。";
+
+// 会话历史：内存环形缓冲（~16 轮），重启即忘
+let standaloneHistory = []; // [{role, content}]
+const STANDALONE_HISTORY_MAX = 32;
+
+function pushStandaloneHistory(role, content) {
+  standaloneHistory.push({ role, content });
+  if (standaloneHistory.length > STANDALONE_HISTORY_MAX) {
+    standaloneHistory.splice(0, standaloneHistory.length - STANDALONE_HISTORY_MAX);
+  }
+}
+
+function standaloneSystemPrompt(voice) {
+  const s = loadStandaloneConfig();
+  const persona = (s.persona || STANDALONE_DEFAULT_PERSONA).trim();
+  const identity =
+    "\n\n【身份说明】当前通过电脑桌面桌宠与你对话的用户就是你的主人本人，" +
+    "请像对待主人一样对待他，不要把他当成陌生用户或其他人。";
+  const fmt = voice ? EMOTION_INSTRUCTION_TTS : EMOTION_INSTRUCTION;
+  return persona + identity + fmt;
+}
+
+async function sendChatStandalone(text, opts = {}) {
+  const proactive = !!opts.proactive; // 主动发言：不占用/不聚焦输入框
+  const imageB64 = opts.imageB64 || ""; // 桌面感知截图（jpeg base64，data URL 内联）
+  const skipToken = !!opts.skipToken; // 允许模型回【略过】静默丢弃
+  if (sending || !text.trim()) return "error";
+  const scfg = loadStandaloneConfig();
+  if (!scfg.llmApiKey) {
+    showBubble();
+    queueType("先在右键菜单「设置」的独立模式里填入模型 API Key 哦。");
+    return "error";
+  }
+  sending = true;
+  const prevLastChatAt = lastChatAt;
+  lastChatAt = Date.now();
+  if (!proactive) chatInput.disabled = true;
+  showBubble();
+  queueType("…");
+
+  const voice = voiceEnabled;
+  const msgs = [{ role: "system", content: standaloneSystemPrompt(voice) }];
+  for (const h of standaloneHistory) msgs.push(h);
+  const userText = voice
+    ? text +
+      "\n（格式提醒：本次回复必须包含【情绪】中文正文和【JP】日语配音稿三部分，【JP】为纯日语，缺一不可。）"
+    : text;
+  msgs.push({ role: "user", content: userText });
+
+  let silent = false;
+  try {
+    const full = await invoke()("pet_chat_direct", {
+      baseUrl: scfg.llmBaseUrl,
+      apiKey: scfg.llmApiKey,
+      model: imageB64 && scfg.sceneModel ? scfg.sceneModel : scfg.llmModel,
+      messages: msgs,
+      imageB64,
+    });
+
+    // 清掉 "…" 占位符
+    typeQueue.length = 0;
+    bubbleText.textContent = "";
+
+    if (!full || !full.trim()) throw new Error("模型返回了空内容");
+    const { emotion, zh, jp } = parsePetReply(full);
+    if (skipToken && /^【\s*略过\s*】/.test((zh || full).trim())) {
+      silent = true;
+      hideBubble();
+      return "silent";
+    }
+    pushStandaloneHistory("user", text);
+    pushStandaloneHistory("assistant", full); // 存原文（含格式标签），后续轮次格式自洽
+    setEmotion(emotion);
+    for (const seg of splitSentences(zh || full)) queueType(seg);
+    scheduleBubbleHide();
+    if (voice && jp) speakJpStandalone(jp, scfg);
+    return "spoken";
+  } catch (err) {
+    console.error(err);
+    typeQueue.length = 0;
+    bubbleText.textContent = "";
+    setEmotion("难过");
+    const msg = String((err && err.message) || err || "");
+    if (/HTTP 40[13]/.test(msg)) {
+      queueType("模型 API Key 无效或没有权限……去设置里检查一下 Key 吧。");
+    } else if (/HTTP 429/.test(msg)) {
+      queueType("模型服务限流了……稍等一会儿再试试吧。");
+    } else if (/HTTP \d+/.test(msg)) {
+      queueType("模型服务返回了错误……" + msg.slice(0, 60));
+    } else {
+      queueType("连接不上模型服务了……检查一下独立模式的地址和网络吧。");
+    }
+    scheduleBubbleHide();
+    return "error";
+  } finally {
+    sending = false;
+    lastChatAt = silent ? prevLastChatAt : Date.now(); // 略过不算发言，不占全局节流
+    if (!proactive) {
+      chatInput.disabled = false;
+      chatInput.focus();
+    }
+  }
+}
+
+// 独立模式 TTS：直连 Style-Bert-VITS2（Query 参数），失败静默降级纯文字
+async function speakJpStandalone(jpText, scfg) {
+  const base = scfg.ttsUrl.replace(/\/+$/, "");
+  if (!base) return;
+  for (const seg of splitSentences(jpText)) {
+    try {
+      const resp = await invoke()("pet_tts_sbv2", {
+        url: base,
+        text: seg,
+        modelId: scfg.ttsModelId,
+        speakerId: scfg.ttsSpeakerId,
+        style: scfg.ttsStyle,
+        length: scfg.ttsLength,
+      });
+      const d = JSON.parse(resp);
+      if (d.audio) enqueueAudio(d.audio);
+      else console.warn("tts 无音频:", d);
+    } catch (e) {
+      console.warn("tts 合成失败:", e);
+    }
+  }
+}
+
 // 逐句调用插件 TTS 并顺序播放（后台执行，不阻塞气泡）
 async function speakJp(jpText, cfg) {
   const ttsUrl = cfg.baseUrl + "/desktop_pet/pet/tts";
@@ -578,6 +784,7 @@ async function speakJp(jpText, cfg) {
 }
 
 async function sendChat(text, opts = {}) {
+  if (petMode() === "standalone") return sendChatStandalone(text, opts);
   const proactive = !!opts.proactive; // 主动发言：不占用/不聚焦输入框
   const image = opts.image || null; // {attachmentId}：随消息附截图（桌面感知）
   const provider = opts.provider || ""; // 强制 selected_provider（识图需视觉模型）
@@ -862,12 +1069,33 @@ $("menu-passthrough").addEventListener("click", () => {
   );
 });
 
+// 设置面板：模式分区显隐联动
+function syncModeSections() {
+  const standalone = $("cfg-mode").value === "standalone";
+  $("cfg-astrbot-section").classList.toggle("hidden", standalone);
+  $("cfg-standalone-section").classList.toggle("hidden", !standalone);
+  $("cfg-section-note").textContent = standalone
+    ? "主动对话与桌面感知（开关/间隔/名单）在 config.local.json 的 proactive 节配置"
+    : "主动对话与桌面感知（开关/间隔/模型/名单）在 AstrBot 插件控制页配置";
+}
+
+$("cfg-mode").addEventListener("change", syncModeSections);
+
 $("menu-settings").addEventListener("click", () => {
   const cfg = loadConfig();
   $("cfg-base-url").value = cfg.baseUrl;
   $("cfg-api-key").value = cfg.apiKey;
+  const scfg = loadStandaloneConfig();
+  $("cfg-mode").value = petMode();
+  $("cfg-llm-base-url").value = scfg.llmBaseUrl;
+  $("cfg-llm-api-key").value = scfg.llmApiKey;
+  $("cfg-llm-model").value = scfg.llmModel;
+  $("cfg-scene-model").value = scfg.sceneModel;
+  $("cfg-persona").value = scfg.persona;
+  $("cfg-tts-url").value = scfg.ttsUrl;
   $("cfg-voice").checked = voiceEnabled;
   $("cfg-message").textContent = "";
+  syncModeSections();
   settings.classList.remove("hidden");
 });
 
@@ -882,13 +1110,47 @@ $("menu-quit").addEventListener("click", () => {
 
 // 设置面板
 $("cfg-save").addEventListener("click", () => {
-  saveConfig($("cfg-base-url").value, $("cfg-api-key").value);
+  const mode = $("cfg-mode").value;
+  localStorage.setItem("pet_mode", mode);
+  if (mode === "standalone") {
+    saveStandaloneConfig();
+  } else {
+    saveConfig($("cfg-base-url").value, $("cfg-api-key").value);
+  }
   $("cfg-message").textContent = "已保存。";
 });
 
 $("cfg-close").addEventListener("click", () => settings.classList.add("hidden"));
 
 $("cfg-test").addEventListener("click", async () => {
+  if ($("cfg-mode").value === "standalone") {
+    // 独立模式探活：发一条空消息看模型是否可达
+    const baseUrl = $("cfg-llm-base-url").value.trim();
+    const apiKey = $("cfg-llm-api-key").value.trim();
+    const model = $("cfg-llm-model").value.trim();
+    if (!baseUrl || !apiKey || !model) {
+      $("cfg-message").textContent = "请先填独立模式的模型地址、Key 和模型名。";
+      return;
+    }
+    $("cfg-message").textContent = "测试中…";
+    try {
+      const text = await invoke()("pet_chat_direct", {
+        baseUrl,
+        apiKey,
+        model,
+        messages: [{ role: "user", content: "只回复两个字：在线" }],
+        imageB64: "",
+      });
+      $("cfg-message").textContent = `✓ 连接成功，模型回复：${String(text).slice(0, 40)}`;
+    } catch (err) {
+      const msg = String((err && err.message) || err || "");
+      if (/HTTP 40[13]/.test(msg)) $("cfg-message").textContent = "✗ API Key 无效或没有权限";
+      else if (/HTTP 429/.test(msg)) $("cfg-message").textContent = "✗ 模型服务限流";
+      else if (/HTTP \d+/.test(msg)) $("cfg-message").textContent = `✗ 模型服务错误：${msg.slice(0, 80)}`;
+      else $("cfg-message").textContent = `✗ 连接失败：${msg.slice(0, 80)}`;
+    }
+    return;
+  }
   const baseUrl = normalizeBaseUrl($("cfg-base-url").value);
   const apiKey = $("cfg-api-key").value.trim();
   $("cfg-message").textContent = "测试中…";
@@ -1191,6 +1453,10 @@ let sceneRemoteCfg = null; // {provider, blocklist[], proactive_enabled, scene_e
 const SCENE_REMOTE_TTL_MS = 120_000;
 
 async function fetchSceneConfig(force = false) {
+  if (petMode() === "standalone") {
+    sceneRemoteCfg = null; // 独立模式无远程配置，直接用 config.local.json/内置默认
+    return sceneRemoteCfg;
+  }
   if (!force && sceneRemoteCfg && Date.now() - sceneRemoteCfg.fetchedAt < SCENE_REMOTE_TTL_MS) {
     return sceneRemoteCfg;
   }
@@ -1379,9 +1645,26 @@ async function sceneWatchTick(ctx, now) {
   await fetchSceneConfig(); // 过期才发请求；配置来自插件控制页
   const p2 = sceneParams(); // 拉取后可能更新了 provider/blocklist
   try {
+    const shot = await invoke()("capture_window", {});
+    const where = shot.window_title || shot.process;
+    if (petMode() === "standalone") {
+      // 独立模式：截图 base64 内联直传（免 /file 上传）
+      const scfg = loadStandaloneConfig();
+      if (!scfg.llmApiKey) return;
+      const prompt = `【情境】这是主人当前前台窗口「${where}」的截图。如果你看到值得评论的内容（比如游戏进展、正在写的文档、有趣的页面），就自然地对主人说一两句；如果没什么值得说的，只回复【略过】。`;
+      console.log("[scene] 触发桌面感知:", where);
+      proactiveLogFire("scene_watch", prompt);
+      sendChat(prompt, {
+        proactive: true,
+        skipToken: true,
+        imageB64: shot.jpeg_b64,
+      }).then((r) => {
+        setLastScene(r === "spoken" ? "spoke" : r === "silent" ? "skip" : "error", r === "error" ? "对话管线异常" : where);
+      });
+      return;
+    }
     const cfg = loadConfig();
     if (!cfg.apiKey) return;
-    const shot = await invoke()("capture_window", {});
     const up = await invoke()("pet_upload_file", {
       url: openApiRoot(cfg.baseUrl) + "/file",
       apiKey: cfg.apiKey,
@@ -1392,7 +1675,6 @@ async function sceneWatchTick(ctx, now) {
     const upJson = JSON.parse(up);
     const attachmentId = upJson.attachment_id || (upJson.data && upJson.data.attachment_id);
     if (!attachmentId) throw new Error("上传响应无 attachment_id: " + up);
-    const where = shot.window_title || shot.process;
     const prompt = `【情境】这是主人当前前台窗口「${where}」的截图。如果你看到值得评论的内容（比如游戏进展、正在写的文档、有趣的页面），就自然地对主人说一两句；如果没什么值得说的，只回复【略过】。`;
     console.log("[scene] 触发桌面感知:", where);
     proactiveLogFire("scene_watch", prompt);
@@ -1439,6 +1721,7 @@ window.__sceneWatch = async () => { // CDP 调试用：强制一次桌面感知�
 // 60s 心跳 + 每次触发后（防抖 5s）上报开关/间隔/最近事件；插件内存暂存，重启即清
 let reportTimer = null;
 async function reportStatus() {
+  if (petMode() === "standalone") return; // 独立模式无控制页，不上报
   try {
     const cfg = loadConfig();
     if (!cfg.apiKey) return;
@@ -1480,9 +1763,14 @@ setTimeout(reportStatus, 8000); // 启动后稍候上报首包
   ]) {
     localStorage.removeItem(k);
   }
-  fetchSceneConfig(true); // 预拉一次远程感知配置，首个周期即可用
+  fetchSceneConfig(true); // 预拉一次远程感知配置，首个周期即可用（独立模式跳过）
   initLive2D(); // 异步加载 Live2D，失败自动回退静态立绘
-  if (!loadConfig().apiKey) {
+  if (petMode() === "standalone") {
+    if (!loadStandaloneConfig().llmApiKey) {
+      showBubble();
+      queueType("你好呀！现在是无 AstrBot 的独立模式，先在右键菜单「设置」里填好模型 API Key 吧。");
+    }
+  } else if (!loadConfig().apiKey) {
     showBubble();
     queueType("你好呀！先在右键菜单「设置」里填好 AstrBot 地址和 API Key，我就能陪你聊天啦。");
   }

@@ -18,6 +18,23 @@
 
 > WebView2 有 CORS 限制，前端不直接 fetch 插件接口：所有 HTTP 走 Rust reqwest 原生层（`pet_*` Tauri 命令），SSE 经 Tauri event 推回前端。
 
+## 独立模式（无 AstrBot）
+
+设置面板「运行模式」切换（`pet_mode` localStorage > `config.local.json mode` > 默认 astrbot）。独立模式下壳端绕过 AstrBot 直连 OpenAI 兼容 API：
+
+```
+app.js sendChat ─► pet_chat_direct (Rust, 非流式) ─► {llm_base_url}/v1/chat/completions
+                     ◄── choices[0].message.content ── parsePetReply → 气泡/情绪/语音
+app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_url}/voice（WSL socat 回环桥→SBV2）
+```
+
+- **`pet_chat_direct`**（main.rs）：base_url 三种写法兼容（`.../v1` 自动补 `/chat/completions`、根地址自动补 `/v1/`、完整路径原样用）；Bearer 鉴权；`image_b64` 非空时把最后一条用户消息扩展为 `text + image_url(data URL)` 段，**桌面感知免 `/file` 上传**；180s 超时。
+- **`pet_tts_sbv2`**（main.rs）：`main.py:_synthesize` 的 Rust 移植（Query 参数 text/language=JP/model_id/speaker_id/style/length，SBV2 `/voice` 是 Query 不是 JSON）。
+- **格式注入搬到壳端**：`sendChatStandalone` 本地拼 system prompt（人格 `standalone.persona` 或内置默认 → 身份说明 → `EMOTION_INSTRUCTION(_TTS)`，与 main.py 常量同文案）+ 用户消息尾格式提醒；会话历史为**内存环形缓冲 32 条**（重启即忘，无 LivingMemory）。
+- **proactive/scene 独立分支**：`fetchSceneConfig`/`reportStatus` 直接短路（无控制页）；scene 截图 base64 内联直传，视觉模型 = `scene_model` 留空则用对话模型。
+- TTS 直连：`setup_sbv2_loopback.sh` 在 WSL 内起 systemd `sbv2-loopback.service`（socat `127.0.0.1:5001 → 172.18.0.1:5000`，仅 WSL 回环，不新增暴露面），Windows `http://localhost:5001` 可达；地址留空/失败静默降级纯文字。
+- 注意：`config.local.json` 会被内嵌进 release exe（构建时快照），独立模式配置可经设置面板写入 localStorage（每用户生效）。
+
 ## 仓库结构
 
 | 路径 | 说明 |
@@ -93,6 +110,7 @@
 | `start_all.ps1` / `stop_all.ps1` | 一键启停整套服务（WSL + AstrBot 容器 + 桌宠 exe）。**PowerShell 5.1 需 UTF-8 BOM 保存** |
 | `start_all.vbs` / `stop_all.vbs` | wscript 隐藏调起 ps1，无控制台窗口，日常双击用 |
 | `asr_server.py` | 语音输入 ASR 服务（whisper @ NPU，**封存待激活**，未接入启动项） |
+| `setup_sbv2_loopback.sh` | WSL 内 socat 回环桥（`127.0.0.1:5001 → 172.18.0.1:5000`，systemd 常驻，幂等；回退 `systemctl disable --now sbv2-loopback`） |
 
 动作实验室：`cd pet_shell/src && python -m http.server 8765` 后开 `http://localhost:8765/lab/`（`probe.html` 为运行时参数探针）。
 

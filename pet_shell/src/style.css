@@ -302,13 +302,25 @@ body {
   color: #666;
 }
 
-#settings input {
+#settings input,
+#settings textarea,
+#settings select {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid #ccc;
   border-radius: 6px;
   font-size: 12px;
   outline: none;
+  box-sizing: border-box;
+}
+
+#settings textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+#settings select {
+  background: #fff;
 }
 
 #settings .settings-checkbox {

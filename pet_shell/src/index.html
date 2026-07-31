@@ -41,10 +41,31 @@
 
   <div id="settings" class="hidden">
     <div class="settings-title">连接设置</div>
-    <label>AstrBot 地址</label>
-    <input id="cfg-base-url" type="text" spellcheck="false" />
-    <label>API Key</label>
-    <input id="cfg-api-key" type="password" spellcheck="false" />
+    <label>运行模式</label>
+    <select id="cfg-mode">
+      <option value="astrbot">AstrBot 模式（推荐）</option>
+      <option value="standalone">独立模式（无 AstrBot）</option>
+    </select>
+    <div id="cfg-astrbot-section">
+      <label>AstrBot 地址</label>
+      <input id="cfg-base-url" type="text" spellcheck="false" />
+      <label>API Key</label>
+      <input id="cfg-api-key" type="password" spellcheck="false" />
+    </div>
+    <div id="cfg-standalone-section" class="hidden">
+      <label>模型地址（OpenAI 兼容，本地 Ollama 也行）</label>
+      <input id="cfg-llm-base-url" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+      <label>模型 API Key</label>
+      <input id="cfg-llm-api-key" type="password" spellcheck="false" />
+      <label>对话模型</label>
+      <input id="cfg-llm-model" type="text" spellcheck="false" placeholder="deepseek-chat" />
+      <label>桌面感知视觉模型（留空 = 用对话模型）</label>
+      <input id="cfg-scene-model" type="text" spellcheck="false" placeholder="留空跟随对话模型" />
+      <label>人格（留空 = 内置默认人格）</label>
+      <textarea id="cfg-persona" rows="3" spellcheck="false" placeholder="你是桌宠…"></textarea>
+      <label>TTS 地址（留空 = 无日语语音）</label>
+      <input id="cfg-tts-url" type="text" spellcheck="false" placeholder="http://localhost:5001" />
+    </div>
     <label class="settings-checkbox"><input id="cfg-voice" type="checkbox" /> 语音（日语配音）</label>
     <div class="settings-divider"></div>
     <div class="settings-title">上传 Live2D 模型</div>
@@ -53,7 +74,7 @@
     <div class="settings-buttons">
       <button id="cfg-model-upload">上传并使用</button>
     </div>
-    <div class="settings-note">主动对话与桌面感知（开关/间隔/模型/名单）在 AstrBot 插件控制页配置</div>
+    <div class="settings-note" id="cfg-section-note">主动对话与桌面感知（开关/间隔/模型/名单）在 AstrBot 插件控制页配置</div>
     <div class="settings-buttons">
       <button id="cfg-test">测试连接</button>
       <button id="cfg-save">保存</button>

@@ -331,6 +331,113 @@ async fn pet_post_json(url: String, api_key: String, body: serde_json::Value) ->
     }
 }
 
+// ---------- 独立模式（无 AstrBot）：直连 OpenAI 兼容 LLM / SBV2 ----------
+
+/// 独立模式对话：直连 OpenAI 兼容 chat/completions（非流式），返回回复全文。
+/// base_url 三种写法均可：.../v1、...（根）、.../v1/chat/completions（完整路径原样用）。
+/// 带 image_b64（jpeg）时把最后一条用户消息扩展为 text+image_url 段（data URL 内联，免上传）。
+#[tauri::command]
+async fn pet_chat_direct(
+    base_url: String,
+    api_key: String,
+    model: String,
+    messages: serde_json::Value,
+    image_b64: Option<String>,
+) -> Result<String, String> {
+    let base = base_url.trim().trim_end_matches('/');
+    let url = if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    };
+
+    let mut msgs = messages;
+    if let Some(b64) = image_b64.filter(|s| !s.is_empty()) {
+        if let Some(last) = msgs.as_array_mut().and_then(|arr| arr.last_mut()) {
+            if let Some(text) = last.get("content").and_then(|c| c.as_str()) {
+                last["content"] = serde_json::json!([
+                    {"type": "text", "text": text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": format!("data:image/jpeg;base64,{b64}")}
+                    }
+                ]);
+            }
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .json(&serde_json::json!({"model": model, "messages": msgs, "stream": false}))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    let content = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v["choices"][0]["message"]["content"].as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    if content.is_empty() {
+        let head = text.chars().take(300).collect::<String>();
+        return Err(format!("模型返回为空（HTTP 200），原文: {head}"));
+    }
+    Ok(content)
+}
+
+/// 独立模式 TTS：直连 Style-Bert-VITS2 /voice（Query 参数，非 JSON），
+/// 返回 JSON 文本 {"audio": "<base64 wav>", "format": "wav"}，与插件 pet/tts 同构。
+/// 参数与插件 _synthesize 一致；主窗口经 WSL 回环桥（socat 127.0.0.1:5001）直达。
+#[tauri::command]
+async fn pet_tts_sbv2(
+    url: String,
+    text: String,
+    model_id: Option<i64>,
+    speaker_id: Option<i64>,
+    style: Option<String>,
+    length: Option<f64>,
+) -> Result<String, String> {
+    let base = url.trim().trim_end_matches('/');
+    let params = [
+        ("text", text),
+        ("language", "JP".to_string()),
+        ("model_id", model_id.unwrap_or(0).to_string()),
+        ("speaker_id", speaker_id.unwrap_or(0).to_string()),
+        ("style", style.unwrap_or_else(|| "Neutral".to_string())),
+        ("length", length.unwrap_or(1.0).to_string()),
+    ];
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{base}/voice"))
+        .query(&params)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(serde_json::json!({"audio": b64, "format": "wav"}).to_string())
+}
+
 /// 桌面感知：抓取当前前台窗口画面（WGC 进程级），返回 JPEG base64 与窗口信息。
 #[tauri::command]
 fn capture_window() -> Result<capture::CaptureResult, String> {
@@ -923,6 +1030,8 @@ fn main() {
             pet_upload_file,
             pet_get,
             pet_post_json,
+            pet_chat_direct,
+            pet_tts_sbv2,
             capture_window,
             get_system_context,
             pet_model_upload,
