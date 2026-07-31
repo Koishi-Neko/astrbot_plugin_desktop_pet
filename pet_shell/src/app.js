@@ -893,6 +893,8 @@ let micCancelAutoSend = false;
 const micBtn = $("mic-btn");
 
 function asrUrl() {
+  const ls = localStorage.getItem("pet_asr_url");
+  if (ls !== null) return ls.trim() || ASR_DEFAULT_URL;
   const u = fileConfig && fileConfig.asr && fileConfig.asr.url;
   return String(u || "").trim() || ASR_DEFAULT_URL;
 }
@@ -916,8 +918,42 @@ function grantMicPermission() {
   invoke()("grant_mic_permission").catch((e) => console.warn("[mic] 预授权失败（弹窗兜底）:", e));
 }
 
+// 语音服务健康探测：未就绪时按钮灰态（点击给提示），每 30s 自动重试至就绪
+let asrReady = false;
+let asrHealthTimer = null;
+
+async function probeAsrHealth() {
+  try {
+    const raw = await invoke()("asr_health", { url: asrUrl() });
+    const h = JSON.parse(raw);
+    if (h && h.status === "ok") {
+      asrReady = true;
+      micBtn.classList.remove("asr-off");
+      micBtn.title = "语音输入（点击开始/结束录音）";
+    } else {
+      asrReady = false;
+      micBtn.classList.add("asr-off");
+      micBtn.title = "语音服务异常：" + String((h && h.load_error) || "未知");
+    }
+  } catch (e) {
+    asrReady = false;
+    micBtn.classList.add("asr-off");
+    micBtn.title = "语音服务未就绪（首次加载约 4 分钟，自动重试中）";
+  }
+  clearTimeout(asrHealthTimer);
+  asrHealthTimer = setTimeout(() => {
+    if (!micRecording) probeAsrHealth();
+  }, 30000);
+}
+
 async function startMicRecording() {
   if (micRecording) return;
+  if (!asrReady) {
+    showBubble();
+    queueType("语音服务还没准备好……首次启动要加载约 4 分钟，稍后再试。");
+    scheduleBubbleHide();
+    return;
+  }
   micRecording = true;
   micRaw16k = [];
   micSpeechSeen = false;
@@ -1309,6 +1345,7 @@ $("menu-settings").addEventListener("click", () => {
   $("cfg-scene-model").value = scfg.sceneModel;
   $("cfg-persona").value = scfg.persona;
   $("cfg-tts-url").value = scfg.ttsUrl;
+  $("cfg-asr-url").value = localStorage.getItem("pet_asr_url") || "";
   $("cfg-voice").checked = voiceEnabled;
   $("cfg-message").textContent = "";
   syncModeSections();
@@ -1333,6 +1370,8 @@ $("cfg-save").addEventListener("click", () => {
   } else {
     saveConfig($("cfg-base-url").value, $("cfg-api-key").value);
   }
+  localStorage.setItem("pet_asr_url", $("cfg-asr-url").value.trim());
+  probeAsrHealth(); // 地址可能变了，立即重探
   $("cfg-message").textContent = "已保存。";
 });
 
@@ -1974,6 +2013,7 @@ setTimeout(reportStatus, 8000); // 启动后稍候上报首包
   await loadFileConfig();
   applyProactiveConfig(); // 主动对话参数覆盖（须在 loadFileConfig 之后）
   grantMicPermission(); // 语音输入：预授予 WebView2 麦克风权限（失败弹窗兜底）
+  probeAsrHealth(); // 语音输入：服务健康探测（未就绪按钮灰态 + 30s 自动重试）
   // 主动对话/桌面感知配置已收口插件控制页，清理全部旧本地键
   for (const k of [
     "pet_proactive",

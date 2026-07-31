@@ -190,6 +190,16 @@ body {
   color: #e53935;
 }
 
+/* 语音服务未就绪：灰态（点击给气泡提示） */
+#mic-btn.asr-off {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#mic-btn.asr-off:hover {
+  color: #999;
+}
+
 #mic-btn.recording {
   color: #fff;
   background: #e53935;

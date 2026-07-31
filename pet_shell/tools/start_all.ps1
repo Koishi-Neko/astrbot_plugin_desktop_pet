@@ -3,18 +3,20 @@
 
 $ErrorActionPreference = "Continue"
 $repo = "C:\Users\15263\astrbot_plugin_desktop_pet"
+$asrDir = "C:\Users\15263\asr-npu"   # ASR 服务目录（venv + 模型），换机/换用户时改这里
+$asrPort = 5055
 
 Write-Output "[1/4] 启动 WSL 服务（SBV2 TTS + Docker 容器）..."
 wsl -e bash -lc "systemctl start docker sbv2-tts 2>/dev/null; docker start astrbot napcat 2>/dev/null; echo done"
 
 Write-Output "[2/4] 启动本地 ASR 服务（语音输入，whisper @ NPU）..."
-$asrListening = Get-NetTCPConnection -LocalPort 5055 -State Listen -ErrorAction SilentlyContinue
+$asrListening = Get-NetTCPConnection -LocalPort $asrPort -State Listen -ErrorAction SilentlyContinue
 if ($asrListening) {
-    Write-Output "  ASR 已在运行（端口 5055），跳过"
+    Write-Output "  ASR 已在运行（端口 $asrPort），跳过"
 } else {
-    $asrExe = "C:\Users\15263\asr-npu\.venv\Scripts\pythonw.exe"
+    $asrExe = "$asrDir\.venv\Scripts\pythonw.exe"
     if (Test-Path $asrExe) {
-        Start-Process -FilePath $asrExe -ArgumentList "asr_server.py" -WorkingDirectory "C:\Users\15263\asr-npu" -WindowStyle Hidden
+        Start-Process -FilePath $asrExe -ArgumentList "asr_server.py" -WorkingDirectory $asrDir -WindowStyle Hidden
         Write-Output "  ASR 启动中（首次 NPU 模型编译约 4 分钟，期间语音输入不可用）"
     } else {
         Write-Output "  警告：找不到 ASR venv（$asrExe），跳过（语音输入不可用）"

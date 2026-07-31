@@ -490,6 +490,33 @@ fn grant_mic_permission(window: tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// 语音输入服务健康探测：GET /health，返回 JSON（status/device/model/load_error）。
+/// 走 Rust 层（前端直连会撞 CORS）；服务未监听（未启动/加载中）时返回连接失败。
+#[tauri::command]
+async fn asr_health(url: String) -> Result<String, String> {
+    let base = url.trim().trim_end_matches('/');
+    let endpoint = if base.ends_with("/health") {
+        base.to_string()
+    } else {
+        format!("{base}/health")
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(endpoint)
+        .send()
+        .await
+        .map_err(|e| format!("连接 ASR 服务失败: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    Ok(text)
+}
+
 /// 语音输入转写：上传 WAV 字节（b64）到本地 ASR 服务，返回 JSON {"text", "elapsed_s", "audio_s"}。
 #[tauri::command]
 async fn asr_transcribe(url: String, wav_b64: String) -> Result<String, String> {
@@ -1117,6 +1144,7 @@ fn main() {
             pet_chat_direct,
             pet_tts_sbv2,
             grant_mic_permission,
+            asr_health,
             asr_transcribe,
             capture_window,
             get_system_context,
