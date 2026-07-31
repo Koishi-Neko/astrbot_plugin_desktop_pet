@@ -738,6 +738,7 @@ async function sendChatStandalone(text, opts = {}) {
   } finally {
     sending = false;
     lastChatAt = silent ? prevLastChatAt : Date.now(); // 略过不算发言，不占全局节流
+    if (!silent) lastRealChatAt = Date.now(); // 主动对话节流只认真实发言
     if (!proactive) {
       chatInput.disabled = false;
       chatInput.focus();
@@ -869,6 +870,7 @@ async function sendChat(text, opts = {}) {
     if (unlisten) unlisten();
     sending = false;
     lastChatAt = silent ? prevLastChatAt : Date.now(); // 略过不算发言，不占全局节流
+    if (!silent) lastRealChatAt = Date.now(); // 主动对话节流只认真实发言
     if (!proactive) {
       chatInput.disabled = false;
       chatInput.focus();
@@ -1294,6 +1296,7 @@ function gazeWander() {
 let coinIdleTimer = null;
 let longIdleActive = false; // 长待机演出中：暂停随机调度、戳一戳只闪表情
 let lastChatAt = Date.now(); // 最近一次对话时间，25s 无对话保底触发演出
+let lastRealChatAt = 0; // 真实发言时间（启动不占位）：驱动主动对话 45min 节流，与 coin_sway 解耦
 const LONG_IDLE_TRIGGER_MS = 25000;
 
 // 长待机演出为 60s 单次动作（末尾 4s 曲线内淡出），播完经 motionFinish 平滑回待机；
@@ -1588,7 +1591,7 @@ async function proactiveTick() {
   const now = Date.now();
   const globalCdMs = proactiveParams.globalCooldownMin * 60_000;
   if (now - proactiveLastFiredAt < globalCdMs) return;
-  if (now - lastChatAt < globalCdMs) return; // 刚正常聊过也别插话
+  if (lastRealChatAt && now - lastRealChatAt < globalCdMs) return; // 本次运行还没真实发言则不节流
   const ctx = await invoke()("get_system_context", {}).catch(() => null);
   if (!ctx) return;
   const s = proactiveState(ctx);
