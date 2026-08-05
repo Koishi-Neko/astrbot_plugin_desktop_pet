@@ -1818,6 +1818,10 @@ function sceneParams() {
 }
 // 这些进程是前台时不值得看（自己/桌面壳；用户名单另行拦截）
 const SCENE_SKIP_PROCESSES = ["pet_shell.exe", "explorer.exe"];
+// 桌面感知动态触发参数（事件驱动，见 sceneWatchTick）
+const SCENE_DEBOUNCE_MS = 75_000; // 窗口变化后稳定这么久才抓（等页面加载/主人看进去）
+const SCENE_MIN_INTERVAL_MS = 10 * 60_000; // 任意两次抓取的全局最小间隔（防快速切换烧 token）
+const SCENE_HEARTBEAT_MS = 90 * 60_000; // 无变化保底心跳：长静态活动不完全沉默
 
 let proactiveLastFiredAt = 0;
 const proactiveRuleCd = {}; // ruleId -> 上次触发时间
@@ -1923,10 +1927,15 @@ async function proactiveTick() {
 }
 
 // ---------- 桌面感知（scene_watch） ----------
-// 抓前台窗口截图 → 上传 /api/v1/file → 视觉模型选说（不值得说则回【略过】静默）。
-// 全屏游戏正是目标场景，不做全屏免打扰；用户离开/自己是前台时不看。
+// 事件驱动：30s tick 免费拿到的前台进程+标题做指纹比对，变化→防抖 75s→抓取送视觉模型；
+// 无变化不抓（省 token），90min 保底心跳防长静态沉默。原 intervalMin 降级为同窗口最小间隔，
+// 另有 10min 全局最小间隔防快速切窗。全屏游戏正是目标场景，不做全屏免打扰；用户离开时不看。
 // lastSceneResult 随状态上报，控制页可见最近一次感知结果。
 let lastSceneResult = null; // {t, outcome: spoke/skip/blocked/error, detail}
+let sceneLastKey = ""; // 上个 tick 的窗口指纹（proc|归一化标题）
+let scenePending = null; // 变化待触发 {key, since}（防抖中）
+let lastSceneCaptureAt = 0; // 上次实际抓取时刻（成败都计）
+let lastSceneCaptureKey = ""; // 上次抓取的窗口指纹
 function setLastScene(outcome, detail = "") {
   lastSceneResult = {
     t: new Date().toLocaleString("zh-CN", { hour12: false }),
@@ -1936,23 +1945,64 @@ function setLastScene(outcome, detail = "") {
   reportStatusSoon();
 }
 
+// 窗口指纹：进程 + 归一化标题（去 "(3) " 式动态计数前缀、折叠空白，减少伪变化）
+function sceneWindowKey(proc, title) {
+  const t = String(title || "")
+    .replace(/^\s*[（(]\d+[)）]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return proc ? proc + "|" + t : "";
+}
+
 async function sceneWatchTick(ctx, now) {
   const p = sceneParams();
-  if (!p.enabled) return;
-  if (now - (proactiveRuleCd.scene_watch || 0) < p.intervalMin * 60_000) return;
-  if (ctx.idle_seconds > p.maxIdleMin * 60) return; // 人不在，看了也白看
+  if (!p.enabled) { sceneLastKey = ""; scenePending = null; return; }
   const proc = (ctx.foreground_process || "").toLowerCase();
-  if (!proc || SCENE_SKIP_PROCESSES.includes(proc)) return;
-  if (p.blocklist.includes(proc)) {
-    // 名单进程（IM/会议/Office 等）：抓取前就拦截，记一条历史便于确认
-    if (now - (proactiveRuleCd.scene_watch_blocked || 0) > 10 * 60_000) {
-      proactiveRuleCd.scene_watch_blocked = now;
-      proactiveLogFire("scene_watch(blocked)", `前台「${proc}」在禁止抓取名单中，已跳过`);
-      setLastScene("blocked", proc);
+  const key = sceneWindowKey(proc, ctx.foreground_title);
+
+  // 人不在：只记指纹不触发（回来由 welcome_back 接管），待触发一并清掉
+  if (ctx.idle_seconds > p.maxIdleMin * 60) { sceneLastKey = key; scenePending = null; return; }
+
+  const blocked = !!proc && p.blocklist.includes(proc);
+  const capturable = !!proc && !SCENE_SKIP_PROCESSES.includes(proc) && !blocked;
+
+  // ① 窗口变化检测（便宜：仅字符串比对，不截图）
+  if (key !== sceneLastKey) {
+    sceneLastKey = key;
+    if (blocked) {
+      // 名单进程（IM/会议/Office 等）：记一条历史（10min 节流）便于确认拦截生效
+      if (now - (proactiveRuleCd.scene_watch_blocked || 0) > 10 * 60_000) {
+        proactiveRuleCd.scene_watch_blocked = now;
+        proactiveLogFire("scene_watch(blocked)", `前台「${proc}」在禁止抓取名单中，已跳过`);
+        setLastScene("blocked", proc);
+      }
+      scenePending = null;
+    } else {
+      scenePending = capturable ? { key, since: now } : null;
     }
     return;
   }
-  proactiveRuleCd.scene_watch = now; // 看过即计，失败也等下个间隔
+
+  // ② 触发判定：变化防抖到期 或 无变化保底心跳
+  let reason = null;
+  if (scenePending) {
+    if (now - scenePending.since < SCENE_DEBOUNCE_MS) return; // 防抖中
+    reason = "change";
+  } else if (capturable && now - lastSceneCaptureAt >= SCENE_HEARTBEAT_MS) {
+    reason = "heartbeat";
+  }
+  if (!reason) return;
+
+  // ③ 频率闸门：同窗口最小间隔（原 intervalMin 语义降级）+ 全局最小间隔
+  if (key === lastSceneCaptureKey && now - lastSceneCaptureAt < p.intervalMin * 60_000) {
+    scenePending = null;
+    return;
+  }
+  if (now - lastSceneCaptureAt < SCENE_MIN_INTERVAL_MS) { scenePending = null; return; }
+
+  scenePending = null;
+  lastSceneCaptureAt = now; // 看过即计，失败也等下个间隔
+  lastSceneCaptureKey = key;
   await fetchSceneConfig(); // 过期才发请求；配置来自插件控制页
   const p2 = sceneParams(); // 拉取后可能更新了 provider/blocklist
   try {
@@ -1963,8 +2013,8 @@ async function sceneWatchTick(ctx, now) {
       const scfg = loadStandaloneConfig();
       if (!scfg.llmApiKey) return;
       const prompt = `【情境】这是主人当前前台窗口「${where}」的截图。如果你看到值得评论的内容（比如游戏进展、正在写的文档、有趣的页面），就自然地对主人说一两句；如果没什么值得说的，只回复【略过】。`;
-      console.log("[scene] 触发桌面感知:", where);
-      proactiveLogFire("scene_watch", prompt);
+      console.log("[scene] 触发桌面感知(" + reason + "):", where);
+      proactiveLogFire("scene_watch(" + reason + ")", prompt);
       sendChat(prompt, {
         proactive: true,
         skipToken: true,
@@ -1987,8 +2037,8 @@ async function sceneWatchTick(ctx, now) {
     const attachmentId = upJson.attachment_id || (upJson.data && upJson.data.attachment_id);
     if (!attachmentId) throw new Error("上传响应无 attachment_id: " + up);
     const prompt = `【情境】这是主人当前前台窗口「${where}」的截图。如果你看到值得评论的内容（比如游戏进展、正在写的文档、有趣的页面），就自然地对主人说一两句；如果没什么值得说的，只回复【略过】。`;
-    console.log("[scene] 触发桌面感知:", where);
-    proactiveLogFire("scene_watch", prompt);
+    console.log("[scene] 触发桌面感知(" + reason + "):", where);
+    proactiveLogFire("scene_watch(" + reason + ")", prompt);
     sendChat(prompt, {
       proactive: true,
       skipToken: true,
@@ -2020,10 +2070,15 @@ window.__proactiveLog = () => JSON.parse(localStorage.getItem("pet_proactive_log
 window.__proactiveParams = () => proactiveParams;
 window.__proactiveTick = proactiveTick;
 window.__sceneShot = () => invoke()("capture_window", {}); // CDP 调试用：抓一帧看效果
-window.__sceneWatch = async () => { // CDP 调试用：强制一次桌面感知（跳间隔跳条件）
+window.__sceneState = () => ({ sceneLastKey, scenePending, lastSceneCaptureAt, lastSceneCaptureKey, lastSceneResult }); // CDP 调试用：看动态触发状态机
+window.__sceneWatch = async () => { // CDP 调试用：强制一次桌面感知（跳防抖跳频率闸门）
   const ctx = await invoke()("get_system_context", {}).catch(() => null);
   if (!ctx) return "no_ctx";
-  proactiveRuleCd.scene_watch = 0;
+  const proc = (ctx.foreground_process || "").toLowerCase();
+  sceneLastKey = sceneWindowKey(proc, ctx.foreground_title);
+  scenePending = { key: sceneLastKey, since: 0 }; // since=0：防抖立即到期
+  lastSceneCaptureAt = 0;
+  lastSceneCaptureKey = "";
   await sceneWatchTick(ctx, Date.now());
   return "done";
 };
