@@ -61,7 +61,7 @@ JP_DUB_INSTRUCTION = (
     "①中文正文：你的回复内容；"
     "②日语配音稿：以「【JP】」开头，紧接与中文正文意思对应的日语，必须是纯日语口语短句，"
     "用于语音合成朗读，不含中文、不含任何方括号标记。"
-    "完整格式示例：「早上好呀，主人！【JP】おはよう、ご主人様！」"
+    "完整格式示例：「早上好呀！【JP】おはよう！」"
     "禁止省略【JP】部分。除【JP】外不要输出任何其他方括号标记。"
 )
 
@@ -668,6 +668,13 @@ class DesktopPetBridge(Star):
         if master_qq and str(event.get_sender_id()) == master_qq:
             req.system_prompt = (req.system_prompt or "") + self._master_identity_note(
                 for_pet=False
+            )
+        elif master_qq:
+            nickname = (event.get_sender_name() or str(event.get_sender_id())).strip()
+            req.system_prompt = (req.system_prompt or "") + (
+                f"\n\n【身份说明】本条消息的发送者不是你的主人"
+                f"（你的主人只有{self._master_name() or '主人'}，QQ {master_qq} 一人）。"
+                f"当前发送者是「{nickname}」，请用其昵称或“你”称呼对方，不要称呼主人。"
             )
         # QQ 日语配音：要求回复带【JP】日语配音稿（on_decorating_result 里合成语音）
         if self._qq_jp_dub_enabled():
