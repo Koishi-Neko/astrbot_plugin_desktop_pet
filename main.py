@@ -826,9 +826,12 @@ class DesktopPetBridge(Star):
                 if overrides.get(k) is not None:
                     cfg[k] = overrides[k]
         base_url = str(cfg.get("tts_base_url") or "http://172.18.0.1:5000").rstrip("/")
+        text = jp_text
+        if len(text) > 100:
+            text = re.sub(r"([。！？!?])", r"\1\n", text)
         try:
             params = {
-                "text": jp_text,
+                "text": text,
                 "model_id": int(cfg.get("tts_model_id", 0)),
                 "speaker_id": int(cfg.get("tts_speaker_id", 0)),
                 "style": str(cfg.get("tts_style") or "Neutral"),
