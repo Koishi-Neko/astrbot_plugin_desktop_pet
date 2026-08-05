@@ -94,7 +94,7 @@ Configuration (settings panel "Standalone" section, or the `standalone` block of
     "llm_api_key": "your model API Key",
     "llm_model": "deepseek-chat",
     "persona": "optional, overrides the built-in default persona",
-    "tts_url": "http://localhost:5001",
+    "tts_url": "http://localhost:5000",
     "scene_model": "optional vision model for scene awareness; empty = chat model"
   }
 }
@@ -102,7 +102,7 @@ Configuration (settings panel "Standalone" section, or the `standalone` block of
 
 > Switch back to AstrBot mode anytime from the settings panel — the two modes are independent and switching is instant.
 
-**Japanese voice in standalone mode**: SBV2 by default listens on the docker bridge `172.18.0.1:5000`, which Windows hosts can't reach. On a WSL setup, run `pet_shell/tools/setup_sbv2_loopback.sh` inside WSL to start a socat loopback bridge (`127.0.0.1:5001 → 172.18.0.1:5000`, a systemd service); Windows then reaches it at `http://localhost:5001`. Leaving the TTS URL empty silently degrades to text-only bubbles.
+**Japanese voice in standalone mode**: requires a local Style-Bert-VITS2 (SBV2) deployment. On this WSL setup SBV2 listens on `127.0.0.1:5000`; thanks to WSL2 localhost forwarding, Windows reaches it directly at `http://localhost:5000` (the old socat loopback bridge was retired with the 2026-08-03 de-containerization). Leaving the TTS URL empty silently degrades to text-only bubbles.
 
 ## Advanced
 
@@ -189,7 +189,7 @@ You can preset configuration via `pet_shell/src/config.local.json` (gitignored; 
     "llm_base_url": "https://api.deepseek.com/v1",
     "llm_api_key": "your model API Key",
     "llm_model": "deepseek-chat",
-    "tts_url": "http://localhost:5001"
+    "tts_url": "http://localhost:5000"
   }
 }
 ```

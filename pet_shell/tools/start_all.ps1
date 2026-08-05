@@ -1,12 +1,12 @@
-﻿# 一键启动桌宠全套环境：WSL(SBV2+docker/AstrBot/NapCat) + 桌宠壳
+﻿# 一键启动桌宠全套环境：WSL(SBV2/AstrBot/NapCat) + 桌宠壳
 # 注意：本地 ASR 服务（语音输入）默认不启动，需要时单独运行 start_asr.ps1 / start_asr.vbs
 # 用法：powershell -File start_all.ps1
 
 $ErrorActionPreference = "Continue"
 $repo = "C:\Users\15263\astrbot_plugin_desktop_pet"
 
-Write-Output "[1/3] 启动 WSL 服务（SBV2 TTS + Docker 容器）..."
-wsl -e bash -lc "systemctl start docker sbv2-tts 2>/dev/null; docker start astrbot napcat 2>/dev/null; echo done"
+Write-Output "[1/3] 启动 WSL 服务（SBV2 TTS + AstrBot + NapCat）..."
+wsl -e bash -lc "systemctl start sbv2-tts astrbot napcat 2>/dev/null; echo done"
 
 Write-Output "[2/3] 等待 AstrBot 就绪（端口 6185）..."
 $ready = $false

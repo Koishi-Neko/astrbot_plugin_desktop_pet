@@ -63,7 +63,7 @@ const STANDALONE_DEFAULTS = {
   llm_api_key: "",
   llm_model: "deepseek-chat",
   persona: "",
-  tts_url: "http://localhost:5001",
+  tts_url: "http://localhost:5000",
   tts_model_id: 0,
   tts_speaker_id: 0,
   tts_style: "Neutral",

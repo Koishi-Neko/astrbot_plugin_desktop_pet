@@ -23,7 +23,7 @@ if ($asr) {
 }
 
 Write-Output "[3/4] 停止 AstrBot / NapCat 容器与 SBV2 服务..."
-wsl -e bash -lc "docker stop astrbot napcat 2>/dev/null; systemctl stop sbv2-tts 2>/dev/null; echo done"
+wsl -e bash -lc "systemctl stop astrbot napcat 2>/dev/null; systemctl stop sbv2-tts 2>/dev/null; echo done"
 
 Write-Output "[4/4] 关闭 WSL（释放后台内存）..."
 wsl --shutdown

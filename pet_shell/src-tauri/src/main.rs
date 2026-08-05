@@ -398,7 +398,7 @@ async fn pet_chat_direct(
 
 /// 独立模式 TTS：直连 Style-Bert-VITS2 /voice（Query 参数，非 JSON），
 /// 返回 JSON 文本 {"audio": "<base64 wav>", "format": "wav"}，与插件 pet/tts 同构。
-/// 参数与插件 _synthesize 一致；主窗口经 WSL 回环桥（socat 127.0.0.1:5001）直达。
+/// 参数与插件 _synthesize 一致；主窗口直连 WSL SBV2（127.0.0.1:5000，经 WSL2 localhost 转发）。
 #[tauri::command]
 async fn pet_tts_sbv2(
     url: String,

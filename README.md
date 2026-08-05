@@ -94,7 +94,7 @@
     "llm_api_key": "你的模型 API Key",
     "llm_model": "deepseek-chat",
     "persona": "可选，覆盖内置默认人格",
-    "tts_url": "http://localhost:5001",
+    "tts_url": "http://localhost:5000",
     "scene_model": "可选，桌面感知视觉模型，留空=用对话模型"
   }
 }
@@ -102,7 +102,7 @@
 
 > 切换回 AstrBot 模式：设置面板把模式改回去即可，两种模式互不影响、随时切换。
 
-**独立模式日语配音**：SBV2 默认监听 docker 网桥 `172.18.0.1:5000`，Windows 宿主不可达。本机（WSL 部署）用仓库 `pet_shell/tools/setup_sbv2_loopback.sh` 在 WSL 内起一个 socat 回环桥（`127.0.0.1:5001 → 172.18.0.1:5000`，systemd 常驻），Windows 经 `http://localhost:5001` 即可合成；TTS 地址留空则静默降级为纯文字气泡。
+**独立模式日语配音**：需要一台本地 Style-Bert-VITS2（SBV2）服务。本机（WSL 部署）SBV2 监听 `127.0.0.1:5000`，经 WSL2 localhost 转发，Windows 直接填 `http://localhost:5000` 即可合成（2026-08-03 全栈去容器化后已无回环桥）；TTS 地址留空则静默降级为纯文字气泡。
 
 ## 进阶玩法
 
@@ -189,7 +189,7 @@ npm run build   # 产出独立 exe：src-tauri/target/release/pet_shell.exe
     "llm_base_url": "https://api.deepseek.com/v1",
     "llm_api_key": "你的模型 API Key",
     "llm_model": "deepseek-chat",
-    "tts_url": "http://localhost:5001"
+    "tts_url": "http://localhost:5000"
   }
 }
 ```
