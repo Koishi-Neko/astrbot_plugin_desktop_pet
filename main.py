@@ -18,12 +18,16 @@ TTS：配置 tts_enabled=true 后，要求模型输出「【情绪】中文正�
 QQ 日语配音（qq_jp_dub_enabled）：on_decorating_result 把回复拆成 Plain(中文)+Record(日语 wav)。
 """
 
+import asyncio
 import base64
 import json
 import os
 import re
+import sqlite3
 import tempfile
 import time
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import aiohttp
 from astrbot.api import logger
@@ -76,6 +80,24 @@ TTS_CONFIG_KEYS = (
     "tts_style",
     "tts_length",
 )
+
+
+def _strip_image_parts(history) -> int:
+    removed = 0
+    for msg in history:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            kept = [
+                p
+                for p in content
+                if not (isinstance(p, dict) and p.get("type") in ("image_url", "image"))
+            ]
+            if len(kept) != len(content):
+                removed += len(content) - len(kept)
+                msg["content"] = kept if kept else "[图片]"
+    return removed
 
 PAGE_CONFIG_KEYS = (
     "master_name",
@@ -204,8 +226,12 @@ class DesktopPetBridge(Star):
         logger.info(
             "[desktop_pet] web api registered: desktop_pet/pet/*, desktop_pet/page/*"
         )
+        self._gc_task = asyncio.create_task(self._history_gc_loop())
 
     async def terminate(self):
+        task = getattr(self, "_gc_task", None)
+        if task:
+            task.cancel()
         logger.info("[desktop_pet] plugin terminated")
 
     # ---------- 路由处理 ----------
@@ -626,6 +652,12 @@ class DesktopPetBridge(Star):
             except Exception as e:
                 logger.warning(f"[desktop_pet] pre-fix pet sender failed: {e}")
 
+    @filter.on_llm_request(priority=5)
+    async def strip_history_images(self, event: AstrMessageEvent, req: ProviderRequest):
+        contexts = getattr(req, "contexts", None)
+        if isinstance(contexts, list):
+            _strip_image_parts(contexts)
+
     @staticmethod
     def _restore_pet_sender(event: AstrMessageEvent, sid: str) -> None:
         """还原发送者：助手消息入库仍用原 sender（总结 prompt 靠 [Bot:] 前缀区分自己），
@@ -739,6 +771,55 @@ class DesktopPetBridge(Star):
 
     def _master_qq(self) -> str:
         return str(self.config.get("master_qq") or "").strip()
+
+    async def _history_gc_loop(self):
+        while True:
+            now = datetime.now()
+            nxt = now.replace(hour=4, minute=30, second=0, microsecond=0)
+            if nxt <= now:
+                nxt += timedelta(days=1)
+            await asyncio.sleep((nxt - now).total_seconds())
+            try:
+                removed, saved = await asyncio.to_thread(self._gc_history_images)
+                if removed:
+                    logger.info(
+                        f"[desktop_pet] history gc: stripped {removed} image parts, saved {saved} chars"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[desktop_pet] history gc failed: {e}")
+
+    def _gc_history_images(self) -> tuple[int, int]:
+        db_path = Path(__file__).resolve().parents[2] / "data_v4.db"
+        total_removed = 0
+        total_saved = 0
+        con = sqlite3.connect(str(db_path), timeout=30)
+        try:
+            cur = con.cursor()
+            rows = cur.execute(
+                "SELECT conversation_id, content FROM conversations"
+            ).fetchall()
+            for cid, content in rows:
+                try:
+                    history = json.loads(content)
+                except Exception:
+                    continue
+                if not isinstance(history, list):
+                    continue
+                removed = _strip_image_parts(history)
+                if removed:
+                    new_content = json.dumps(history, ensure_ascii=False)
+                    cur.execute(
+                        "UPDATE conversations SET content=? WHERE conversation_id=?",
+                        (new_content, cid),
+                    )
+                    total_removed += removed
+                    total_saved += len(content) - len(new_content)
+            con.commit()
+        finally:
+            con.close()
+        return total_removed, total_saved
 
     def _qq_jp_dub_enabled(self) -> bool:
         return bool(self.config.get("qq_jp_dub_enabled", False))
