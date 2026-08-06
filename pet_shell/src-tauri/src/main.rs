@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -25,6 +26,109 @@ fn set_click_through_state(app: &tauri::AppHandle, enabled: bool) {
 
 fn toggle_click_through(app: &tauri::AppHandle) {
     set_click_through_state(app, !CLICK_THROUGH.load(Ordering::SeqCst));
+}
+
+// ---------- 前台切换看门狗（置顶 + WebView2 视觉树重断言） ----------
+// 全屏/最大化的 flip-model 应用（如 Windows 照片查看器）关闭时，DWM 从独立翻转
+// 切回桌面合成，WebView2 挂在本窗口的 DirectComposition 视觉树会失效；透明窗口
+// 没有 GDI 内容可兜底重绘 = 桌宠看起来"消失"，直到下次 z-order/焦点变化才恢复。
+// 监听 EVENT_SYSTEM_FOREGROUND：前台易主即重插 topmost 并通知 WebView2 重建视觉。
+
+static WATCHDOG_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+static WATCHDOG_EPOCH: AtomicU64 = AtomicU64::new(0);
+static WATCHDOG_FIRES: AtomicU64 = AtomicU64::new(0);
+static WATCHDOG_REASSERTS: AtomicU64 = AtomicU64::new(0);
+static WATCHDOG_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// 重插 topmost 触发 DWM 合成树重排 + 通知 WebView2 重建视觉树（官方恢复 API）。
+fn reassert_topmost_and_visual(window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    if let Ok(hwnd) = window.hwnd() {
+        // tauri 2.11 内部 windows 0.61 与本 crate 0.62 的 HWND 是不同类型，取裸指针重建
+        let hwnd = HWND(hwnd.0);
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+    let _ = window.with_webview(|webview| unsafe {
+        let _ = webview.controller().NotifyParentWindowPositionChanged();
+    });
+}
+
+unsafe extern "system" fn foreground_event_proc(
+    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: windows::Win32::Foundation::HWND,
+    _id_object: i32,
+    _id_child: i32,
+    _id_event_thread: u32,
+    _dwms_event_time: u32,
+) {
+    WATCHDOG_FIRES.fetch_add(1, Ordering::SeqCst);
+    let epoch = WATCHDOG_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
+    let Some(app) = WATCHDOG_APP.get().cloned() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        // 防抖：关闭全屏应用时前台常连续易主，200ms 内合并为一次重断言
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if WATCHDOG_EPOCH.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            WATCHDOG_REASSERTS.fetch_add(1, Ordering::SeqCst);
+            if let Some(w) = app2.get_webview_window("main") {
+                reassert_topmost_and_visual(&w);
+            }
+        });
+    });
+}
+
+fn install_foreground_watchdog(app: &tauri::AppHandle) {
+    use windows::Win32::UI::Accessibility::SetWinEventHook;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    };
+    let _ = WATCHDOG_APP.set(app.clone());
+    unsafe {
+        let hook = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+        let ok = !hook.0.is_null();
+        WATCHDOG_INSTALLED.store(ok, Ordering::SeqCst);
+        if !ok {
+            eprintln!("foreground watchdog: SetWinEventHook failed");
+        }
+        // hook 句柄故意不保存：与进程同生共死，退出时由 OS 回收
+    }
+}
+
+/// 看门狗状态（CDP 调试用）：hook 是否安装、前台事件数、实际重断言数。
+#[tauri::command]
+fn pet_watchdog_status() -> serde_json::Value {
+    serde_json::json!({
+        "installed": WATCHDOG_INSTALLED.load(Ordering::SeqCst),
+        "fires": WATCHDOG_FIRES.load(Ordering::SeqCst),
+        "reasserts": WATCHDOG_REASSERTS.load(Ordering::SeqCst),
+    })
 }
 
 #[tauri::command]
@@ -1134,6 +1238,7 @@ fn main() {
             set_click_through,
             quit_app,
             resize_window,
+            pet_watchdog_status,
             pet_health,
             pet_capabilities,
             pet_open_chat,
@@ -1163,6 +1268,8 @@ fn main() {
                     eprintln!("grant_mic_permission: {e}");
                 }
             }
+            // 前台切换看门狗：全屏应用关闭后 WebView2 视觉树失效导致"桌宠消失"的恢复
+            install_foreground_watchdog(app.handle());
             // 全局快捷键 Ctrl+Shift+P 切换点击穿透（穿透开启后窗口收不到事件，只能靠它切回）
             app.global_shortcut().on_shortcut(
                 "CmdOrControl+Shift+P",
