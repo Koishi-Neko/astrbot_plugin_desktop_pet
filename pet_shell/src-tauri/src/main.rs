@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager,
 };
@@ -12,33 +12,151 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod capture;
 
-static CLICK_THROUGH: AtomicBool = AtomicBool::new(false);
+static CLICK_THROUGH: AtomicBool = AtomicBool::new(false); // 手动穿透（菜单/快捷键）
+static AUTO_PASS: AtomicBool = AtomicBool::new(false); // 检测结果：前台窗口全屏-like
+static AUTO_PASS_ENABLED: AtomicBool = AtomicBool::new(true); // 功能开关（托盘可切）
+static AUTO_PASS_SUPPRESS: AtomicBool = AtomicBool::new(false); // 全屏中用户主动恢复交互
+static PASS_EFFECTIVE: AtomicBool = AtomicBool::new(false); // 已应用的生效态
 
-fn set_click_through_state(app: &tauri::AppHandle, enabled: bool) {
-    CLICK_THROUGH.store(enabled, Ordering::SeqCst);
+/// 生效态 = 手动 || (功能开启 && 前台全屏 && 未被压制)；仅变化时应用并回调前端。
+fn apply_pass_through(app: &tauri::AppHandle) {
+    let manual = CLICK_THROUGH.load(Ordering::SeqCst);
+    let auto = AUTO_PASS.load(Ordering::SeqCst)
+        && AUTO_PASS_ENABLED.load(Ordering::SeqCst)
+        && !AUTO_PASS_SUPPRESS.load(Ordering::SeqCst);
+    let effective = manual || auto;
+    if PASS_EFFECTIVE.swap(effective, Ordering::SeqCst) == effective {
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_ignore_cursor_events(enabled);
+        let _ = window.set_ignore_cursor_events(effective);
         let _ = window.eval(&format!(
-            "window.onClickThrough && window.onClickThrough({enabled})"
+            "window.onClickThrough && window.onClickThrough({effective}, {})",
+            effective && auto && !manual
         ));
     }
 }
 
-fn toggle_click_through(app: &tauri::AppHandle) {
-    set_click_through_state(app, !CLICK_THROUGH.load(Ordering::SeqCst));
+fn set_click_through_state(app: &tauri::AppHandle, enabled: bool) {
+    CLICK_THROUGH.store(enabled, Ordering::SeqCst);
+    if enabled {
+        AUTO_PASS_SUPPRESS.store(false, Ordering::SeqCst);
+    }
+    apply_pass_through(app);
 }
 
-// ---------- 前台切换看门狗（置顶 + WebView2 视觉树重断言） ----------
+/// 切换作用于生效态：自动穿透中按下 = 压制自动检测（本次全屏期间恢复交互），
+/// 压制在离开全屏后自动复位。
+fn toggle_click_through(app: &tauri::AppHandle) {
+    if PASS_EFFECTIVE.load(Ordering::SeqCst) {
+        CLICK_THROUGH.store(false, Ordering::SeqCst);
+        if AUTO_PASS.load(Ordering::SeqCst) {
+            AUTO_PASS_SUPPRESS.store(true, Ordering::SeqCst);
+        }
+        apply_pass_through(app);
+    } else {
+        set_click_through_state(app, true);
+    }
+}
+
+// ---------- 前台切换看门狗（置顶 + WebView2 视觉树重断言 + 全屏自动穿透） ----------
 // 全屏/最大化的 flip-model 应用（如 Windows 照片查看器）关闭时，DWM 从独立翻转
 // 切回桌面合成，WebView2 挂在本窗口的 DirectComposition 视觉树会失效；透明窗口
 // 没有 GDI 内容可兜底重绘 = 桌宠看起来"消失"，直到下次 z-order/焦点变化才恢复。
 // 监听 EVENT_SYSTEM_FOREGROUND：前台易主即重插 topmost 并通知 WebView2 重建视觉。
+// 同一事件源顺带做全屏自动穿透：前台是全屏-like 窗口（游戏）时桌宠改 click-through，
+// 否则恢复——解决置顶桌宠在全屏游戏里抢鼠标的问题（置顶保留，只挡输入）。
 
 static WATCHDOG_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
 static WATCHDOG_EPOCH: AtomicU64 = AtomicU64::new(0);
 static WATCHDOG_FIRES: AtomicU64 = AtomicU64::new(0);
 static WATCHDOG_REASSERTS: AtomicU64 = AtomicU64::new(0);
 static WATCHDOG_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// 前台窗口是否"全屏-like"。两路判定：① 窗口矩形覆盖所在显示器（无边框窗口化
+/// 游戏）；② SHQueryUserNotificationState 报全屏（独占全屏 D3D，矩形判定在独占
+/// 切换瞬间可能失真）。排除桌面/explorer（Alt+Tab 回桌面时 Progman 也是全屏矩形，
+/// 不排除会导致回到桌面仍保持穿透）。多显示器注意：QUNS 是全会话级信号，全屏应用
+/// 在别的屏时本屏也会判 true（本机单屏使用，可接受）。
+fn foreground_is_fullscreen_like() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::Shell::{
+        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
+        QUNS_RUNNING_D3D_FULL_SCREEN,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() || hwnd == GetShellWindow() {
+            return false;
+        }
+        // 排除 explorer（桌面/任务栏获得焦点的场景）
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid != 0 {
+            if let Ok(hproc) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                let mut pbuf = [0u16; 512];
+                let mut len = pbuf.len() as u32;
+                let name = if QueryFullProcessImageNameW(
+                    hproc,
+                    PROCESS_NAME_WIN32,
+                    windows::core::PWSTR(pbuf.as_mut_ptr()),
+                    &mut len,
+                )
+                .is_ok()
+                {
+                    String::from_utf16_lossy(&pbuf[..len as usize])
+                } else {
+                    String::new()
+                };
+                let _ = CloseHandle(hproc);
+                let exe = name.rsplit('\\').next().unwrap_or(&name);
+                if exe.eq_ignore_ascii_case("explorer.exe") {
+                    return false;
+                }
+            }
+        }
+        // ① 矩形覆盖所在显示器
+        let mut rc = RECT::default();
+        if GetWindowRect(hwnd, &mut rc).is_ok() {
+            let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(mon, &mut mi).as_bool() {
+                let m = mi.rcMonitor;
+                if rc.left <= m.left
+                    && rc.top <= m.top
+                    && rc.right >= m.right
+                    && rc.bottom >= m.bottom
+                {
+                    return true;
+                }
+            }
+        }
+        // ② 独占全屏兜取（QUNS_BUSY = 有全屏应用在跑）
+        if let Ok(quns) = SHQueryUserNotificationState() {
+            if quns == QUNS_BUSY
+                || quns == QUNS_RUNNING_D3D_FULL_SCREEN
+                || quns == QUNS_PRESENTATION_MODE
+            {
+                return true;
+            }
+        }
+        false
+    }
+}
 
 /// 重插 topmost 触发 DWM 合成树重排 + 通知 WebView2 重建视觉树（官方恢复 API）。
 fn reassert_topmost_and_visual(window: &tauri::WebviewWindow) {
@@ -86,12 +204,19 @@ unsafe extern "system" fn foreground_event_proc(
         if WATCHDOG_EPOCH.load(Ordering::SeqCst) != epoch {
             return;
         }
+        let fullscreen = foreground_is_fullscreen_like();
         let app2 = app.clone();
         let _ = app.run_on_main_thread(move || {
             WATCHDOG_REASSERTS.fetch_add(1, Ordering::SeqCst);
             if let Some(w) = app2.get_webview_window("main") {
                 reassert_topmost_and_visual(&w);
             }
+            // 全屏自动穿透：离开全屏时顺带复位用户压制
+            AUTO_PASS.store(fullscreen, Ordering::SeqCst);
+            if !fullscreen {
+                AUTO_PASS_SUPPRESS.store(false, Ordering::SeqCst);
+            }
+            apply_pass_through(&app2);
         });
     });
 }
@@ -119,15 +244,32 @@ fn install_foreground_watchdog(app: &tauri::AppHandle) {
         }
         // hook 句柄故意不保存：与进程同生共死，退出时由 OS 回收
     }
+    // 启动即补一次全屏检测：开机自启时若游戏已是前台，不会有前台事件可触发
+    {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let fs = foreground_is_fullscreen_like();
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                AUTO_PASS.store(fs, Ordering::SeqCst);
+                apply_pass_through(&app2);
+            });
+        });
+    }
 }
 
-/// 看门狗状态（CDP 调试用）：hook 是否安装、前台事件数、实际重断言数。
+/// 看门狗状态（CDP 调试用）：hook 是否安装、前台事件数、实际重断言数、穿透各态。
 #[tauri::command]
 fn pet_watchdog_status() -> serde_json::Value {
     serde_json::json!({
         "installed": WATCHDOG_INSTALLED.load(Ordering::SeqCst),
         "fires": WATCHDOG_FIRES.load(Ordering::SeqCst),
         "reasserts": WATCHDOG_REASSERTS.load(Ordering::SeqCst),
+        "auto_pass_raw": AUTO_PASS.load(Ordering::SeqCst),
+        "auto_pass_enabled": AUTO_PASS_ENABLED.load(Ordering::SeqCst),
+        "auto_pass_suppressed": AUTO_PASS_SUPPRESS.load(Ordering::SeqCst),
+        "pass_effective": PASS_EFFECTIVE.load(Ordering::SeqCst),
     })
 }
 
@@ -1283,17 +1425,32 @@ fn main() {
             // 系统托盘
             let pass =
                 MenuItem::with_id(app, "pass", "切换点击穿透 (Ctrl+Shift+P)", true, None::<&str>)?;
+            let auto_pass = CheckMenuItem::with_id(
+                app,
+                "auto_pass",
+                "全屏自动穿透（游戏防抢鼠标）",
+                true,
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&pass, &quit])?;
+            let menu = Menu::with_items(app, &[&pass, &auto_pass, &quit])?;
             let mut tray = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
                 .tooltip("AstrBotPet");
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
-            tray.on_menu_event(|app, event| match event.id.as_ref() {
+            let auto_pass_handle = auto_pass.clone();
+            tray.on_menu_event(move |app, event| match event.id.as_ref() {
                 "quit" => app.exit(0),
                 "pass" => toggle_click_through(app),
+                "auto_pass" => {
+                    let new = !AUTO_PASS_ENABLED.load(Ordering::SeqCst);
+                    AUTO_PASS_ENABLED.store(new, Ordering::SeqCst);
+                    let _ = auto_pass_handle.set_checked(new);
+                    apply_pass_through(app);
+                }
                 _ => {}
             })
             .build(app)?;

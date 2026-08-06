@@ -1516,9 +1516,16 @@ function showStatusTip(text, ms) {
   if (ms) setTimeout(() => statusTip.classList.add("hidden"), ms);
 }
 
-window.onClickThrough = (enabled) => {
+window.onClickThrough = (enabled, autoDriven) => {
   clickThroughOn = enabled;
-  showStatusTip(enabled ? "穿透模式：Ctrl+Shift+P 恢复" : "已恢复交互", enabled ? 0 : 2000);
+  showStatusTip(
+    enabled
+      ? autoDriven
+        ? "检测到全屏应用：自动穿透中（Ctrl+Shift+P 临时恢复）"
+        : "穿透模式：Ctrl+Shift+P 恢复"
+      : "已恢复交互",
+    enabled ? 0 : 2000
+  );
 };
 
 // ---------- 灵动待机系统 ----------
