@@ -194,7 +194,7 @@ const MODEL_PROFILES = {
       "调皮": "playful",
     },
     idleMotion: "idle_sway",
-    coinSway: true, // 无 Param149 手型的纯摇摆版长待机演出（gen_motions.py 第二参 "-" 生成）
+    coinSway: true, // 长待机演出持裙摆+手柄（gen_motions.py 第二参 "quinzi,shoubing" 生成）
     pokeMotions: ["ear_perk", "curious", "twist", "tilt", "shake"],
     pokeExprs: ["happy", "dizzy_eyes", "playful", "hat", "gamepad"],
     idleMotions: ["ear_perk", "ear_wiggle", "twist", "curious", "ear_fold", "nod", "tilt", "sway"],
