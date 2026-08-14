@@ -3,7 +3,7 @@
 # 用法：powershell -File start_all.ps1
 
 $ErrorActionPreference = "Continue"
-$repo = "C:\Users\15263\astrbot_plugin_desktop_pet"
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # 仓库根目录（脚本位于 <repo>\pet_shell\tools）
 
 Write-Output "[1/3] 启动 WSL 服务（SBV2 TTS + AstrBot + NapCat）..."
 wsl -e bash -lc "systemctl start sbv2-tts astrbot napcat 2>/dev/null; echo done"

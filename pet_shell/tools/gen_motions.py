@@ -90,25 +90,6 @@ def keyframe_curve(param_id, points):
     return {"Target": "Parameter", "Id": param_id, "Segments": segments}
 
 
-def _win_sin(t, t0, t1, amp, cycles, phase=0.0, ramp=0.15):
-    """窗口正弦：[t0,t1] 外恒 0，窗口两端 smoothstep 渐入渐出防跳变。"""
-    if t < t0 or t > t1:
-        return 0.0
-    tau = t - t0
-    env = _smoothstep(max(0.0, min(1.0, tau / ramp, (t1 - t0 - tau) / ramp)))
-    return amp * env * math.sin(2 * math.pi * cycles * tau / (t1 - t0) + phase)
-
-
-def sampled_curve(param_id, duration, fn):
-    """按 30fps 采样任意函数 fn(t) 生成曲线（可把多个窗口正弦叠加进同一条参数曲线）。"""
-    n = int(duration * FPS)
-    pts = []
-    for i in range(n + 1):
-        t = i / FPS
-        pts.append((round(t, 4), round(fn(t), 4)))
-    return keyframe_curve(param_id, pts)
-
-
 def envelope_sine_curve(param_id, duration, amplitude, env_base=0.65, env_amp=0.35, cycles=1):
     """幅度包络正弦：载波为整周期慢摆，幅度按 env_base±env_amp 周期起伏。
 

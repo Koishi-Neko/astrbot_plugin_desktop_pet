@@ -5,7 +5,7 @@
 # 日志：$asrDir\asr.log / asr.err.log
 
 $ErrorActionPreference = "Continue"
-$asrDir = "C:\Users\15263\asr-npu"   # ASR 服务目录（venv + 模型），换机/换用户时改这里
+$asrDir = if ($env:ASR_DIR) { $env:ASR_DIR } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE "asr-npu" } else { Join-Path $HOME "asr-npu" }   # ASR 服务目录（venv + 模型），默认 %USERPROFILE%\asr-npu，可用环境变量 ASR_DIR 覆盖
 $asrPort = 5055
 
 # 双重幂等：端口监听（已就绪）或 asr_server.py 进程（加载中）任一存在即跳过
