@@ -1,7 +1,11 @@
 """程序化生成 Live2D 动作文件（motion3.json）。
 
-用法：python tools/gen_motions.py [模型目录]
+用法：python tools/gen_motions.py [模型目录] [保持参数]
 默认模型目录：pet_shell/src/assets/live2d/chino
+保持参数：长待机演出（coin_sway）中要保持为 1 的道具/手型参数，逗号分隔，
+默认 Param149（智乃提币手型）；"-" 表示无（纯摇摆版）；
+ariu 用 "quinzi,shoubing"（裙子+手柄，见下方 ariu 专属集）。
+idle_sway 会携带这些参数的归零曲线，确保演出结束/被打断后道具复位。
 
 生成动作：
 - nod        点头（ParamAngleY 正弦两个来回，1.2s）
@@ -10,7 +14,16 @@
 - sway       身体摇摆（ParamBodyAngleZ 与 ParamAngleZ 反向联动，2.4s）
 - idle_sway  待机增强版：原 idle 曲线的微妙变化 + 低频头部/身体摆动（Loop）
 
-生成后自动注册到模型目录下的 chino.model3.json（Motions 分组）。
+模型目录名为 ariu 时追加猫耳专属集（基于参数探测：Param14/15=耳竖、Param12/13=耳耷、
+ParamBodyAngleZ2=扭身、Param18=瞳孔放大）：
+- ear_perk   猫耳快竖两下保持（"咦？"），带头侧+瞳孔放大（1.2s）
+- ear_wiggle 猫耳高频小抖 3 下（得意）（1.5s）
+- ear_fold   飞机耳+低头（心虚）（2.4s）
+- twist      扭身撒娇（2.5s）
+- curious    歪头+耳竖+瞳孔放大（好奇）（2.0s）
+且 idle_sway 追加双耳不同相位微颤曲线。
+
+生成后自动注册到模型目录下的 *.model3.json（Motions 分组）。
 """
 
 import json
@@ -77,6 +90,25 @@ def keyframe_curve(param_id, points):
     return {"Target": "Parameter", "Id": param_id, "Segments": segments}
 
 
+def _win_sin(t, t0, t1, amp, cycles, phase=0.0, ramp=0.15):
+    """窗口正弦：[t0,t1] 外恒 0，窗口两端 smoothstep 渐入渐出防跳变。"""
+    if t < t0 or t > t1:
+        return 0.0
+    tau = t - t0
+    env = _smoothstep(max(0.0, min(1.0, tau / ramp, (t1 - t0 - tau) / ramp)))
+    return amp * env * math.sin(2 * math.pi * cycles * tau / (t1 - t0) + phase)
+
+
+def sampled_curve(param_id, duration, fn):
+    """按 30fps 采样任意函数 fn(t) 生成曲线（可把多个窗口正弦叠加进同一条参数曲线）。"""
+    n = int(duration * FPS)
+    pts = []
+    for i in range(n + 1):
+        t = i / FPS
+        pts.append((round(t, 4), round(fn(t), 4)))
+    return keyframe_curve(param_id, pts)
+
+
 def envelope_sine_curve(param_id, duration, amplitude, env_base=0.65, env_amp=0.35, cycles=1):
     """幅度包络正弦：载波为整周期慢摆，幅度按 env_base±env_amp 周期起伏。
 
@@ -136,6 +168,9 @@ def main():
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "src", "assets", "live2d", "chino",
     )
+    # 保持参数列表（智乃=Param149 提币手型；ariu=quinzi,shoubing 裙子+手柄；"-"=无）
+    hold_arg = sys.argv[2] if len(sys.argv) > 2 else "Param149"
+    hold_params = [] if hold_arg == "-" else [p for p in hold_arg.split(",") if p]
     motions_dir = os.path.join(model_dir, "motions")
     os.makedirs(motions_dir, exist_ok=True)
 
@@ -153,37 +188,89 @@ def main():
     }
 
     # idle_sway：原 idle 曲线 + 低频摆动（待机增强）
-    # 附带 Param149(提币手部形态) 归零曲线：确保 coin_sway 结束/被打断后手型复位
+    # 附带保持参数归零曲线：确保 coin_sway 结束/被打断后道具/手型复位
     idle_path = os.path.join(motions_dir, "idle.motion3.json")
     idle_curves = []
     if os.path.exists(idle_path):
         idle_curves = json.load(open(idle_path, encoding="utf-8")).get("Curves", [])
-    generated["idle_sway"] = make_motion(6.0, idle_curves + [
-        keyframe_curve("Param149", [(0, 0), (6.0, 0)]),
+    hold_reset = [keyframe_curve(p, [(0, 0), (6.0, 0)]) for p in hold_params]
+    generated["idle_sway"] = make_motion(6.0, idle_curves + hold_reset + [
         sine_curve("ParamAngleZ", 6.0, 1.8, 1),
         sine_curve("ParamBodyAngleZ", 6.0, 1.2, 1, phase=math.pi / 2),
         sine_curve("ParamAngleX", 6.0, 1.0, 2),
     ], loop=True)
 
     # coin_sway：60s 单次长待机演出（不循环），末尾 8s 曲线内淡出，平滑接回待机
-    # - Param149(提币手部形态)：1s 淡入保持，52s 起 8s 淡出放下
+    # - 保持参数（智乃 Param149 / ariu quinzi+shoubing）：1s 淡入保持，52s 起 8s 淡出放下
     # - 头部/上身：整周期慢摆，幅度包络 中→大→中→小→中，末 8s 幅度渐收至 0
     # - 播完自然触发 motionFinish 回 idle_sway，无割裂
     COIN_DURATION = 60.0
     COIN_FADE = 8.0
-    generated["coin_sway"] = make_motion(COIN_DURATION, idle_curves + [
-        keyframe_curve("Param149", [(0, 0), (1.0, 1.0), (COIN_DURATION - COIN_FADE, 1.0), (COIN_DURATION, 0)]),
+    hand_hold = [keyframe_curve(p, [(0, 0), (1.0, 1.0), (COIN_DURATION - COIN_FADE, 1.0), (COIN_DURATION, 0)]) for p in hold_params]
+    generated["coin_sway"] = make_motion(COIN_DURATION, idle_curves + hand_hold + [
         apply_fade_out(envelope_sine_curve("ParamAngleZ", COIN_DURATION, 12.0, cycles=12), COIN_DURATION, COIN_FADE),
         apply_fade_out(envelope_sine_curve("ParamBodyAngleZ", COIN_DURATION, 11.0, cycles=12), COIN_DURATION, COIN_FADE),
         apply_fade_out(envelope_sine_curve("ParamBodyAngleX", COIN_DURATION, 5.5, cycles=24), COIN_DURATION, COIN_FADE),  # 身体轻微摇感
         apply_fade_out(sine_curve("ParamAngleX", COIN_DURATION, 1.0, 25), COIN_DURATION, COIN_FADE),  # 微幅点头保持灵动感
     ], loop=False)
 
+    # ariu 专属动作集：猫耳（Param14/15=竖起，Param12/13=耷拉）+ 扭身（ParamBodyAngleZ2）
+    # + 瞳孔放大（Param18，非眨眼通道可进动作曲线）；手部参数仅转手不做抬臂（手臂是烘焙美术件）
+    if os.path.basename(os.path.normpath(model_dir)) == "ariu":
+        # 猫耳竖起（注意到什么的"咦？"瞬间）：双耳快竖两下→保持→放松，头微侧
+        generated["ear_perk"] = make_motion(1.2, [
+            keyframe_curve("Param14", [(0, 0), (0.12, 12), (0.3, 4), (0.45, 12), (0.8, 12), (1.2, 0)]),
+            keyframe_curve("Param15", [(0, 0), (0.12, 12), (0.3, 4), (0.45, 12), (0.8, 12), (1.2, 0)]),
+            keyframe_curve("ParamAngleZ", [(0, 0), (0.3, 5), (1.2, 0)]),
+            keyframe_curve("Param18", [(0, 0), (0.2, 0.5), (0.9, 0.5), (1.2, 0)]),
+        ])
+        # 猫耳抖动：双耳高频小幅抖 3 下（得意/开心）
+        generated["ear_wiggle"] = make_motion(1.5, [
+            damped_shake_curve("Param14", 1.5, 5.0, 3, ramp_up=0.15, ramp_down=0.4),
+            damped_shake_curve("Param15", 1.5, 5.0, 3, ramp_up=0.15, ramp_down=0.4),
+            damped_shake_curve("ParamAngleZ", 1.5, 3.0, 3, ramp_up=0.15, ramp_down=0.4),
+        ])
+        # 飞机耳+低头（心虚/不好意思）：双耳耷拉保持，头微低
+        generated["ear_fold"] = make_motion(2.4, [
+            keyframe_curve("Param12", [(0, 0), (0.4, -18), (1.6, -18), (2.4, 0)]),
+            keyframe_curve("Param13", [(0, 0), (0.4, -18), (1.6, -18), (2.4, 0)]),
+            keyframe_curve("ParamAngleY", [(0, 0), (0.5, 10), (1.6, 10), (2.4, 0)]),
+        ])
+        # 扭捏：身体扭转左右晃（撒娇感），头反向小联动
+        generated["twist"] = make_motion(2.5, [
+            damped_shake_curve("ParamBodyAngleZ2", 2.5, 8.0, 3),
+            damped_shake_curve("ParamAngleZ", 2.5, 4.0, 3),
+            damped_shake_curve("ParamAngleX", 2.5, 3.0, 3),
+        ])
+        # 好奇：歪头保持+猫耳竖起+瞳孔放大
+        generated["curious"] = make_motion(2.0, [
+            keyframe_curve("ParamAngleZ", [(0, 0), (0.5, 14), (1.4, 14), (2.0, 0)]),
+            keyframe_curve("Param14", [(0, 0), (0.3, 10), (1.4, 10), (2.0, 0)]),
+            keyframe_curve("Param15", [(0, 0), (0.3, 10), (1.4, 10), (2.0, 0)]),
+            keyframe_curve("Param18", [(0, 0), (0.4, 0.6), (1.4, 0.6), (2.0, 0)]),
+        ])
+        # 待机增强：在原 3 曲线基础上加猫耳微动（双耳不同相位，似呼吸般轻颤）
+        generated["idle_sway"] = make_motion(6.0, idle_curves + hold_reset + [
+            sine_curve("ParamAngleZ", 6.0, 1.8, 1),
+            sine_curve("ParamBodyAngleZ", 6.0, 1.2, 1, phase=math.pi / 2),
+            sine_curve("ParamAngleX", 6.0, 1.0, 2),
+            sine_curve("Param14", 6.0, 1.5, 1, phase=math.pi / 4),
+            sine_curve("Param15", 6.0, 1.5, 1, phase=math.pi / 3),
+        ], loop=True)
+        # 长待机演出加猫耳慢摇（与待机同款，随末 8s 一起淡出）
+        generated["coin_sway"] = make_motion(COIN_DURATION, idle_curves + hand_hold + [
+            apply_fade_out(envelope_sine_curve("ParamAngleZ", COIN_DURATION, 12.0, cycles=12), COIN_DURATION, COIN_FADE),
+            apply_fade_out(envelope_sine_curve("ParamBodyAngleZ", COIN_DURATION, 11.0, cycles=12), COIN_DURATION, COIN_FADE),
+            apply_fade_out(envelope_sine_curve("ParamBodyAngleX", COIN_DURATION, 5.5, cycles=24), COIN_DURATION, COIN_FADE),
+            apply_fade_out(sine_curve("ParamAngleX", COIN_DURATION, 1.0, 25), COIN_DURATION, COIN_FADE),
+            apply_fade_out(sine_curve("Param14", COIN_DURATION, 2.0, 12, phase=math.pi / 4), COIN_DURATION, COIN_FADE),
+            apply_fade_out(sine_curve("Param15", COIN_DURATION, 2.0, 12, phase=math.pi / 3), COIN_DURATION, COIN_FADE),
+        ], loop=False)
+
     for name, motion in generated.items():
         out = os.path.join(motions_dir, f"{name}.motion3.json")
         json.dump(motion, open(out, "w", encoding="utf-8"), ensure_ascii=False)
         print("written:", out)
-
     # 注册到 model3.json
     mj_path = None
     for f in os.listdir(model_dir):

@@ -43,12 +43,12 @@
   <script src="../vendor/pixi.min.js"></script>
   <script src="../vendor/cubism4.min.js"></script>
   <script>
-    // 模型入口（?model=chino_q 或 ?model=hiyori 切换，默认智乃）
-    const MODEL_KEYS = { chino: "chino", chino_q: "chino_q", hiyori: "hiyori" };
+    // 模型入口（?model=chino_q / ariu / hiyori 切换，默认智乃）
+    const MODEL_KEYS = { chino: "chino", chino_q: "chino_q", ariu: "ariu", hiyori: "hiyori" };
     const modelKey = MODEL_KEYS[new URLSearchParams(location.search).get("model")] || "chino";
     const MODEL_URL = `../assets/live2d/${modelKey}/${modelKey}.model3.json`;
-    // 待机动作组名（智乃是程序化 idle_sway，其余用自带 Idle 组）
-    const IDLE_GROUP = modelKey === "chino" ? "idle_sway" : "Idle";
+    // 待机动作组名（智乃/阿露是程序化 idle_sway，其余用自带 Idle 组）
+    const IDLE_GROUP = (modelKey === "chino" || modelKey === "ariu") ? "idle_sway" : "Idle";
     const status = (t) => (document.getElementById("status").textContent = t);
 
     (async () => {

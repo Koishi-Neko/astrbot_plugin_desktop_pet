@@ -145,6 +145,7 @@ const EMOTION_EXPRESSIONS = {
 const MODELS = {
   chino: { name: "智乃", url: "assets/live2d/chino/chino.model3.json" },
   chino_q: { name: "智乃Q版", url: "assets/live2d/chino_q/chino_q.model3.json" },
+  ariu: { name: "阿露", url: "assets/live2d/ariu/ariu.model3.json" },
   hiyori: { name: "桃濑日和", url: "assets/live2d/hiyori/hiyori.model3.json" },
 };
 
@@ -176,6 +177,28 @@ const MODEL_PROFILES = {
     pokeMotions: ["nod", "tilt", "sway", "shake"],
     pokeExprs: ["heart_eyes_blush", "squeezed_eyes", "o_mouth", "magic_staff", "hold"],
     idleMotions: ["nod", "tilt", "sway", "shake"],
+  },
+  ariu: {
+    // 阿露（VTube 皮套，moc3=Cubism 4.2）：无自带动作，全套程序化动作复用智乃曲线；
+    // 原生情绪脸 dizzy_eyes/dark_face + 合成表情 happy/surprised/sad/playful/shy（眉毛被刘海挡住，全靠眼嘴）；
+    // heart_eyes(aixin) 参数存在但贴图层无可见效果（疑似上游半成品），保留注册不映射；
+    // hat/jk_bag/gamepad/coat_off/skirt/twintail_*_off 为道具服装开关
+    expressions: {
+      "平静": null,
+      "高兴": "happy",
+      "生气": "dark_face",
+      "害羞": "shy",
+      "惊讶": "surprised",
+      "难过": "sad",
+      "疑惑": "dizzy_eyes",
+      "调皮": "playful",
+    },
+    idleMotion: "idle_sway",
+    coinSway: true, // 无 Param149 手型的纯摇摆版长待机演出（gen_motions.py 第二参 "-" 生成）
+    pokeMotions: ["ear_perk", "curious", "twist", "tilt", "shake"],
+    pokeExprs: ["happy", "dizzy_eyes", "playful", "hat", "gamepad"],
+    idleMotions: ["ear_perk", "ear_wiggle", "twist", "curious", "ear_fold", "nod", "tilt", "sway"],
+    idleExprs: ["playful", "happy"], // 待机随机闪 wink/笑（currentIdleActions 支持 idleExprs）
   },
   hiyori: {
     expressions: null, // 无表情文件，情绪仅走气泡/语音
@@ -1679,6 +1702,11 @@ function currentIdleActions() {
       ...activeProfile.idleMotions.map((m) => [
         m,
         () => live2dModel.motion(m).catch(() => {}),
+      ]),
+      // 可选：待机随机闪表情（档案配 idleExprs 时启用，如 ariu 的 wink/笑）
+      ...(activeProfile.idleExprs || []).map((e) => [
+        `expr:${e}`,
+        () => flashExpression(e),
       ]),
       ["gaze", gazeWander],
     ];
