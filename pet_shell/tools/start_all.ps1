@@ -6,7 +6,8 @@ $ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # 仓库根目录（脚本位于 <repo>\pet_shell\tools）
 
 Write-Output "[1/3] 启动 WSL 服务（SBV2 TTS + AstrBot + NapCat）..."
-wsl -e bash -lc "systemctl start sbv2-tts astrbot napcat 2>/dev/null; echo done"
+wsl -u root -e bash -lc "systemctl start sbv2-tts napcat 2>/dev/null; echo done"
+wsl -e bash -lc "export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/1000} DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/1000/bus}; systemctl --user start astrbot 2>/dev/null; echo done"
 
 Write-Output "[2/3] 等待 AstrBot 就绪（端口 6185）..."
 $ready = $false
