@@ -378,6 +378,7 @@ async fn pet_open_chat(
         use futures_util::StreamExt;
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
+        let mut emitted_any = false; // 是否已向前端推送过任何 data: 帧
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
@@ -390,6 +391,7 @@ async fn pet_open_chat(
                             if let Ok(json) =
                                 serde_json::from_str::<serde_json::Value>(data.trim())
                             {
+                                emitted_any = true;
                                 let _ = window.emit("pet-chat", json);
                             }
                         }
@@ -403,6 +405,20 @@ async fn pet_open_chat(
                     return;
                 }
             }
+        }
+        // HTTP 200 但并非 SSE（如 open API 参数校验失败返回 {"status":"error",...} JSON）：
+        // 一帧都没有时把残余报文体作为 connect_error 透出，否则前端会永远等不到 end 帧而卡死。
+        if !emitted_any {
+            let preview: String = buf.trim().chars().take(300).collect();
+            let msg = if preview.is_empty() {
+                "empty response (no SSE frames)".to_string()
+            } else {
+                preview
+            };
+            let _ = window.emit(
+                "pet-chat",
+                serde_json::json!({"type": "connect_error", "message": msg}),
+            );
         }
         let _ = window.emit("pet-chat", serde_json::json!({"type": "stream_end"}));
     });

@@ -832,6 +832,11 @@ async function sendChat(text, opts = {}) {
   let unlisten = null;
   let resolveFinished;
   const finished = new Promise((resolve) => (resolveFinished = resolve));
+  // 兜底 1：整体超时（帧流中断且无 stream_end 时也能解锁，防气泡永久卡"…"）
+  const chatTimeout = setTimeout(
+    () => resolveFinished({ error: "等待回复超时（180s）……网络或服务端可能卡住了" }),
+    180_000,
+  );
   unlisten = await listenEvent("pet-chat", (ev) => {
     const data = ev.payload || {};
     if (data.type === "complete") {
@@ -840,6 +845,10 @@ async function sendChat(text, opts = {}) {
       resolveFinished({ error: data.message });
     } else if (data.type === "end") {
       resolveFinished({ error: null });
+    } else if (data.type === "stream_end") {
+      // 兜底 2：连接关闭但未收到 end 帧（如服务端返回了非 SSE 的错误体）。
+      // 已拿到 complete 全文则视为成功收尾，否则报错解锁，绝不永久挂起。
+      resolveFinished({ error: full ? null : "连接已中断：未收到结束帧" });
     }
     // session_id / run_started / plain / agent_stats / message_saved 等帧无需处理
   });
@@ -890,6 +899,7 @@ async function sendChat(text, opts = {}) {
     scheduleBubbleHide();
     return "error";
   } finally {
+    clearTimeout(chatTimeout);
     if (unlisten) unlisten();
     sending = false;
     lastChatAt = silent ? prevLastChatAt : Date.now(); // 略过不算发言，不占全局节流
