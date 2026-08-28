@@ -96,6 +96,9 @@ Configuration (settings panel "Standalone" section, or the `standalone` block of
     "persona": "optional, overrides the built-in default persona",
     "tts_url": "http://localhost:5000",
     "scene_model": "optional vision model for scene awareness; empty = chat model"
+  },
+  "asr": {
+    "url": "http://127.0.0.1:5055"
   }
 }
 ```
@@ -136,7 +139,7 @@ Open the input bar and hit the round mic button on the left to start recording (
 Configured in the plugin control page (in standalone mode: the `proactive` block of `config.local.json`); the shell pulls changes within ~2 minutes:
 
 - **Proactive chat**: late-night reminder (active past 23:00–02:00), welcome-back (after 30+ min away), sedentary alert (2h continuous activity). Global 45-minute throttle; never disturbs while fullscreen, typing or away.
-- **Scene awareness**: periodically captures the **foreground window** and asks a vision model to comment on interesting content (game progress, funny pages); stays silent when there's nothing to say. **Screenshots are sent to your LLM provider.** Processes on the blocklist (WeChat/QQ/DingTalk/Office… by default) are never captured. Exclusive-fullscreen games can't be captured (borderless windowed works).
+- **Scene awareness**: periodically captures the **foreground window** and asks a vision model to comment on interesting content (game progress, funny pages); stays silent when there's nothing to say. **Screenshots are sent to your LLM provider.** The vision model can be chosen from a datalist hint on the control page, or left empty to use the chat model. Processes on the blocklist (WeChat/QQ/DingTalk/Office… by default) are never captured. Exclusive-fullscreen games can't be captured (borderless windowed works).
 
 ### Custom Live2D models
 
@@ -190,6 +193,9 @@ You can preset configuration via `pet_shell/src/config.local.json` (gitignored; 
     "llm_api_key": "your model API Key",
     "llm_model": "deepseek-chat",
     "tts_url": "http://localhost:5000"
+  },
+  "asr": {
+    "url": "http://127.0.0.1:5055"
   }
 }
 ```
