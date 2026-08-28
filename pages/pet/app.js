@@ -261,6 +261,29 @@ async function saveConfig() {
 
 let sceneProviders = []; // GET 时附带的已配置 provider 列表（下拉建议+校验）
 
+function formatProviderHint(p) {
+  const flag = p.supports_image ? "支持图片" : "不支持图片";
+  return `${p.id} · ${p.model} · ${flag}`;
+}
+
+function updateSceneProviderHint() {
+  const input = $("scene-provider").value.trim();
+  const hint = $("scene-provider-hint");
+  if (!input) {
+    hint.textContent = "留空：桌面感知将使用会话默认模型（推荐）。";
+    hint.className = "warn";
+    return;
+  }
+  const matched = sceneProviders.find((p) => p.id === input);
+  if (matched) {
+    hint.textContent = `已选择：${formatProviderHint(matched)}`;
+    hint.className = "warn";
+  } else {
+    hint.textContent = `未匹配到已配置 provider「${input}」，保存时会校验失败。请从下拉建议中选择。`;
+    hint.className = "warn";
+  }
+}
+
 async function loadSceneConfig() {
   const cfg = await bridge.apiGet("page/scene_config");
   $("proactive-enabled").checked = !!cfg.proactive_enabled;
@@ -274,9 +297,11 @@ async function loadSceneConfig() {
   for (const p of sceneProviders) {
     const opt = document.createElement("option");
     opt.value = p.id;
-    opt.label = `${p.model}${p.supports_image ? "（支持图片）" : "（不支持图片）"}`;
+    // label 用于浏览器下拉时显示更友好；不同浏览器表现略有差异，value 始终保持 provider id
+    opt.label = `${p.model} · ${p.supports_image ? "支持图片" : "不支持图片"}`;
     dl.appendChild(opt);
   }
+  updateSceneProviderHint();
 }
 
 async function saveSceneConfig() {
@@ -369,6 +394,7 @@ $("tts-model").addEventListener("change", () => {
 $("tts-length").addEventListener("input", () => {
   $("tts-length-val").textContent = Number($("tts-length").value).toFixed(2);
 });
+$("scene-provider").addEventListener("input", updateSceneProviderHint);
 
 await loadConfig();
 await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadAsrConfig(), loadPersonaConfig()]);
