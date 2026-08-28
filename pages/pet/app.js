@@ -85,6 +85,26 @@ async function refreshStatus() {
   }
 }
 
+async function loadTokenStats() {
+  const box = $("token-stats-box");
+  box.innerHTML = "加载中…";
+  try {
+    const s = await bridge.apiGet("page/token_stats");
+    if (!s.has_data) {
+      box.innerHTML = "暂无数据";
+      return;
+    }
+    const st = s.stats;
+    const formatLine = (title, data) => {
+      const { input, cached, output, ttft_avg } = data;
+      return `【${title}】 输入 ${input} (其中命中缓存 ${cached}) / 输出 ${output} / 平均首字响应 ${ttft_avg}s`;
+    };
+    box.innerHTML = formatLine("今日", st.today) + "\n" + formatLine("总计", st.all_time);
+  } catch (e) {
+    box.innerHTML = "暂无数据";
+  }
+}
+
 // ---------- 主人身份配置区 ----------
 
 async function loadMasterConfig() {
@@ -376,7 +396,7 @@ async function testTts() {
 // ---------- 初始化 ----------
 
 await bridge.ready();
-$("btn-refresh").addEventListener("click", refreshStatus);
+$("btn-refresh").addEventListener("click", () => { refreshStatus(); loadTokenStats(); });
 $("btn-save-master").addEventListener("click", saveMasterConfig);
 $("btn-save-dub").addEventListener("click", saveJpDub);
 $("btn-save-persona").addEventListener("click", savePersona);
@@ -397,6 +417,6 @@ $("tts-length").addEventListener("input", () => {
 $("scene-provider").addEventListener("input", updateSceneProviderHint);
 
 await loadConfig();
-await Promise.all([refreshStatus(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadAsrConfig(), loadPersonaConfig()]);
+await Promise.all([refreshStatus(), loadTokenStats(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadAsrConfig(), loadPersonaConfig()]);
 // 配置里的 style/speaker 选中值在模型列表加载后应用一次
 onModelChange();

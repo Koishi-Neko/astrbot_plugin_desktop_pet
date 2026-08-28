@@ -128,3 +128,119 @@ def test_strip_think_parts_mixed():
         {"content": "hello"},
         {"content": "world"}
     ]
+
+import sqlite3
+import pytest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+from datetime import datetime
+
+def test_get_provider_stats_no_file(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path.return_value = mock_path_obj
+
+        # db does not exist
+        res = bridge._get_provider_stats()
+        assert res == {"has_data": False}
+
+def test_get_provider_stats_no_table(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    db_file = tmp_path / "data_v4.db"
+    con = sqlite3.connect(str(db_file))
+    con.close()
+
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path_obj.__truediv__.return_value = db_file
+        mock_path.return_value = mock_path_obj
+
+        res = bridge._get_provider_stats()
+        assert res == {"has_data": False}
+
+def test_get_provider_stats_normal(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    db_file = tmp_path / "data_v4.db"
+    con = sqlite3.connect(str(db_file))
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE provider_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at DATETIME,
+            token_input_other INTEGER,
+            token_input_cached INTEGER,
+            token_output INTEGER,
+            time_to_first_token REAL,
+            updated_at DATETIME,
+            agent_type TEXT,
+            status TEXT,
+            umo TEXT,
+            conversation_id TEXT,
+            provider_id TEXT,
+            provider_model TEXT,
+            start_time REAL,
+            end_time REAL
+        )
+    """)
+    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_input_cached, token_output, time_to_first_token) VALUES (?, 10, 5, 20, 1.5)", (today_str,))
+    cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_input_cached, token_output, time_to_first_token) VALUES (?, 30, 0, 40, 2.5)", ("2000-01-01 12:00:00.000000",))
+    con.commit()
+    con.close()
+
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path_obj.__truediv__.return_value = db_file
+        mock_path.return_value = mock_path_obj
+
+        res = bridge._get_provider_stats()
+        assert res["has_data"] is True
+        stats = res["stats"]
+
+        assert stats["all_time"]["input"] == 40
+        assert stats["all_time"]["cached"] == 5
+        assert stats["all_time"]["output"] == 60
+        assert stats["all_time"]["ttft_avg"] == 2.0
+
+        assert stats["today"]["input"] == 10
+        assert stats["today"]["cached"] == 5
+        assert stats["today"]["output"] == 20
+        assert stats["today"]["ttft_avg"] == 1.5
+
+def test_get_provider_stats_missing_optional_column(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    db_file = tmp_path / "data_v4.db"
+    con = sqlite3.connect(str(db_file))
+    cur = con.cursor()
+    # Table lacks token_input_cached and time_to_first_token
+    cur.execute("""
+        CREATE TABLE provider_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at DATETIME,
+            token_input_other INTEGER,
+            token_output INTEGER
+        )
+    """)
+    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_output) VALUES (?, 10, 20)", (today_str,))
+    con.commit()
+    con.close()
+
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path_obj.__truediv__.return_value = db_file
+        mock_path.return_value = mock_path_obj
+
+        res = bridge._get_provider_stats()
+        assert res["has_data"] is True
+        stats = res["stats"]
+
+        assert stats["today"]["input"] == 10
+        assert stats["today"]["cached"] == 0
+        assert stats["today"]["output"] == 20
+        assert stats["today"]["ttft_avg"] == 0.0

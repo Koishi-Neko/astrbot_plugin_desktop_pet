@@ -13,7 +13,8 @@ def pytest_configure():
 
     # We also need to define Star for DesktopPetBridge to inherit from
     class MockStar:
-        pass
+        def __init__(self, context):
+            self.context = context
 
     sys.modules['astrbot.api.star'].Star = MockStar
     sys.modules['astrbot.api.star'].Context = MagicMock()
