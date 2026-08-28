@@ -665,14 +665,32 @@ const EMOTION_INSTRUCTION_TTS =
   "禁止省略【JP】部分。不要使用 markdown、列表或代码块，" +
   "除开头的情绪标签和【JP】外不要输出任何其他方括号标记。";
 
-// 会话历史：内存环形缓冲（~16 轮），重启即忘
+// 会话历史：持久化环形缓冲（默认 32 轮），启动恢复
 let standaloneHistory = []; // [{role, content}]
 const STANDALONE_HISTORY_MAX = 32;
+try {
+  const saved = JSON.parse(localStorage.getItem("pet_standalone_history") || "[]");
+  if (Array.isArray(saved)) {
+    standaloneHistory = saved.slice(-STANDALONE_HISTORY_MAX);
+  }
+} catch (e) {
+  standaloneHistory = [];
+}
+
+window.__clearStandaloneHistory = () => {
+  standaloneHistory = [];
+  localStorage.removeItem("pet_standalone_history");
+};
 
 function pushStandaloneHistory(role, content) {
   standaloneHistory.push({ role, content });
   if (standaloneHistory.length > STANDALONE_HISTORY_MAX) {
     standaloneHistory.splice(0, standaloneHistory.length - STANDALONE_HISTORY_MAX);
+  }
+  try {
+    localStorage.setItem("pet_standalone_history", JSON.stringify(standaloneHistory));
+  } catch (e) {
+    console.warn("保存 standaloneHistory 失败:", e);
   }
 }
 
