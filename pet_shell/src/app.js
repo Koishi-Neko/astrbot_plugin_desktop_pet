@@ -1886,6 +1886,7 @@ function proactiveLogFire(ruleId, promptText) {
   try {
     const logs = JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
     logs.push({
+      type: "fire",
       t: new Date().toLocaleString("zh-CN", { hour12: false }),
       rule: ruleId,
       prompt: promptText.slice(0, 50),
@@ -1893,6 +1894,30 @@ function proactiveLogFire(ruleId, promptText) {
     localStorage.setItem("pet_proactive_log", JSON.stringify(logs.slice(-20)));
   } catch {}
   reportStatusSoon(); // 有新动态就尽快同步到控制页
+}
+
+function proactiveLogSkip(gateName, reason, ruleId = null) {
+  try {
+    const logs = JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
+    let matchIdx = -1;
+    for (let i = logs.length - 1; i >= 0; i--) {
+      if (logs[i].type === "skip" && logs[i].gate === gateName && (logs[i].rule ?? null) === ruleId && logs[i].reason === reason) {
+        matchIdx = i;
+        break;
+      }
+    }
+    const t = new Date().toLocaleString("zh-CN", { hour12: false });
+    if (matchIdx !== -1) {
+      const [matched] = logs.splice(matchIdx, 1);
+      matched.t = t;
+      logs.push(matched);
+    } else {
+      const entry = { type: "skip", t, gate: gateName, reason };
+      if (ruleId) entry.rule = ruleId;
+      logs.push(entry);
+    }
+    localStorage.setItem("pet_proactive_log", JSON.stringify(logs.slice(-20)));
+  } catch {}
 }
 
 const PROACTIVE_RULES = [
@@ -1943,22 +1968,22 @@ function proactiveState(ctx) {
 }
 
 async function proactiveTick() {
-  if (!proactiveEnabled() || sending) return;
-  if (!inputBar.classList.contains("hidden")) return; // 输入框打开中，勿打扰
+  if (!proactiveEnabled() || sending) { proactiveLogSkip("tick", "disabled_or_sending"); return; }
+  if (!inputBar.classList.contains("hidden")) { proactiveLogSkip("tick", "input_bar_open"); return; } // 输入框打开中，勿打扰
   const now = Date.now();
   const globalCdMs = proactiveParams.globalCooldownMin * 60_000;
-  if (now - proactiveLastFiredAt < globalCdMs) return;
-  if (lastRealChatAt && now - lastRealChatAt < globalCdMs) return; // 本次运行还没真实发言则不节流
+  if (now - proactiveLastFiredAt < globalCdMs) { proactiveLogSkip("tick", "global_cd"); return; }
+  if (lastRealChatAt && now - lastRealChatAt < globalCdMs) { proactiveLogSkip("tick", "real_chat_cd"); return; } // 本次运行还没真实发言则不节流
   const ctx = await invoke()("get_system_context", {}).catch(() => null);
-  if (!ctx) return;
+  if (!ctx) { proactiveLogSkip("tick", "no_ctx"); return; }
   const s = proactiveState(ctx);
   s.isFullscreen = !!ctx.is_fullscreen; // 全屏门槛已下沉到各规则 when()
   let fired = false;
   for (const rule of PROACTIVE_RULES) {
     const p = proactiveParams.rules[rule.id];
-    if (!p || !p.enabled) continue;
-    if (now - (proactiveRuleCd[rule.id] || 0) < p.cooldownHours * 3600_000) continue;
-    if (!rule.when(s, p)) continue;
+    if (!p || !p.enabled) { proactiveLogSkip("rule", "disabled", rule.id); continue; }
+    if (now - (proactiveRuleCd[rule.id] || 0) < p.cooldownHours * 3600_000) { proactiveLogSkip("rule", "cooldown", rule.id); continue; }
+    if (!rule.when(s, p)) { proactiveLogSkip("rule", "condition_not_met", rule.id); continue; }
     proactiveRuleCd[rule.id] = now;
     proactiveLastFiredAt = now;
     fired = true;
@@ -2001,12 +2026,12 @@ function sceneWindowKey(proc, title) {
 
 async function sceneWatchTick(ctx, now) {
   const p = sceneParams();
-  if (!p.enabled) { sceneLastKey = ""; scenePending = null; return; }
+  if (!p.enabled) { sceneLastKey = ""; scenePending = null; proactiveLogSkip("scene", "disabled"); return; }
   const proc = (ctx.foreground_process || "").toLowerCase();
   const key = sceneWindowKey(proc, ctx.foreground_title);
 
   // 人不在：只记指纹不触发（回来由 welcome_back 接管），待触发一并清掉
-  if (ctx.idle_seconds > p.maxIdleMin * 60) { sceneLastKey = key; scenePending = null; return; }
+  if (ctx.idle_seconds > p.maxIdleMin * 60) { sceneLastKey = key; scenePending = null; proactiveLogSkip("scene", "user_idle"); return; }
 
   const blocked = !!proc && p.blocklist.includes(proc);
   const capturable = !!proc && !SCENE_SKIP_PROCESSES.includes(proc) && !blocked;
@@ -2025,25 +2050,27 @@ async function sceneWatchTick(ctx, now) {
     } else {
       scenePending = capturable ? { key, since: now } : null;
     }
+    proactiveLogSkip("scene", blocked ? "blocked_changed" : "changed_debouncing_started");
     return;
   }
 
   // ② 触发判定：变化防抖到期 或 无变化保底心跳
   let reason = null;
   if (scenePending) {
-    if (now - scenePending.since < SCENE_DEBOUNCE_MS) return; // 防抖中
+    if (now - scenePending.since < SCENE_DEBOUNCE_MS) { proactiveLogSkip("scene", "debouncing"); return; } // 防抖中
     reason = "change";
   } else if (capturable && now - lastSceneCaptureAt >= SCENE_HEARTBEAT_MS) {
     reason = "heartbeat";
   }
-  if (!reason) return;
+  if (!reason) { proactiveLogSkip("scene", "no_trigger_reason"); return; }
 
   // ③ 频率闸门：同窗口最小间隔（原 intervalMin 语义降级）+ 全局最小间隔
   if (key === lastSceneCaptureKey && now - lastSceneCaptureAt < p.intervalMin * 60_000) {
     scenePending = null;
+    proactiveLogSkip("scene", "same_window_cd");
     return;
   }
-  if (now - lastSceneCaptureAt < SCENE_MIN_INTERVAL_MS) { scenePending = null; return; }
+  if (now - lastSceneCaptureAt < SCENE_MIN_INTERVAL_MS) { scenePending = null; proactiveLogSkip("scene", "global_cd"); return; }
 
   scenePending = null;
   lastSceneCaptureAt = now; // 看过即计，失败也等下个间隔
@@ -2056,7 +2083,7 @@ async function sceneWatchTick(ctx, now) {
     if (petMode() === "standalone") {
       // 独立模式：截图 base64 内联直传（免 /file 上传）
       const scfg = loadStandaloneConfig();
-      if (!scfg.llmApiKey) return;
+      if (!scfg.llmApiKey) { proactiveLogSkip("scene", "no_api_key"); return; }
       const prompt = `【情境】这是主人当前前台窗口「${where}」的截图。如果你看到值得评论的内容（比如游戏进展、正在写的文档、有趣的页面），就自然地对主人说一两句；如果没什么值得说的，只回复【略过】。`;
       console.log("[scene] 触发桌面感知(" + reason + "):", where);
       proactiveLogFire("scene_watch(" + reason + ")", prompt);
@@ -2070,7 +2097,7 @@ async function sceneWatchTick(ctx, now) {
       return;
     }
     const cfg = loadConfig();
-    if (!cfg.apiKey) return;
+    if (!cfg.apiKey) { proactiveLogSkip("scene", "no_api_key"); return; }
     const up = await invoke()("pet_upload_file", {
       url: openApiRoot(cfg.baseUrl) + "/file",
       apiKey: cfg.apiKey,

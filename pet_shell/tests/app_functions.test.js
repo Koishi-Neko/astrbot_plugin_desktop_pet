@@ -113,3 +113,95 @@ describe('normalizeBaseUrl', () => {
     assert.strictEqual(normalizeBaseUrl('http://example.com/api/v1/'), 'http://example.com/api/v1');
   });
 });
+
+describe('proactiveLog functions', () => {
+  function createCtx() {
+    const store = {};
+    const ctx = vm.createContext({
+      localStorage: {
+        getItem(key) { return store[key] || null; },
+        setItem(key, val) { store[key] = String(val); },
+        clear() { for(let k in store) delete store[k]; }
+      },
+      reportStatusSoon: () => {}
+    });
+    const logFireStr = source.match(/^function proactiveLogFire\s*\([^)]*\)\s*\{[\s\S]*?^\}/m)[0];
+    const logSkipStr = source.match(/^function proactiveLogSkip\s*\([^)]*\)\s*\{[\s\S]*?^\}/m)[0];
+    vm.runInContext(logFireStr, ctx);
+    vm.runInContext(logSkipStr, ctx);
+    return { ctx, store };
+  }
+
+  test('dedup: same gate+reason+rule bumps existing entry to the end and refreshes timestamp', () => {
+    const { ctx, store } = createCtx();
+    const proactiveLogSkip = (gateName, reason, ruleId) => vm.runInContext(`proactiveLogSkip("${gateName}", "${reason}"${ruleId !== undefined ? `, "${ruleId}"` : ''})`, ctx);
+
+    proactiveLogSkip("tick", "disabled");
+    const t1 = JSON.parse(store["pet_proactive_log"])[0].t;
+    proactiveLogSkip("scene", "debouncing");
+    proactiveLogSkip("tick", "disabled"); // Dedup test without ruleId
+
+    let logs = JSON.parse(store["pet_proactive_log"]);
+    assert.strictEqual(logs.length, 2);
+    assert.strictEqual(logs[0].gate, "scene");
+    assert.strictEqual(logs[1].gate, "tick");
+
+    proactiveLogSkip("rule", "cooldown", "night_owl");
+    proactiveLogSkip("scene", "idle");
+    proactiveLogSkip("rule", "cooldown", "night_owl"); // Dedup test with ruleId
+    logs = JSON.parse(store["pet_proactive_log"]);
+    assert.strictEqual(logs.length, 4);
+    assert.strictEqual(logs[2].gate, "scene");
+    assert.strictEqual(logs[3].gate, "rule");
+    assert.strictEqual(logs[3].rule, "night_owl");
+  });
+
+  test('fire entry and skip entry coexist and keep their type', () => {
+    const { ctx, store } = createCtx();
+    const proactiveLogSkip = (gateName, reason) => vm.runInContext(`proactiveLogSkip("${gateName}", "${reason}")`, ctx);
+    const proactiveLogFire = (ruleId, prompt) => vm.runInContext(`proactiveLogFire("${ruleId}", "${prompt}")`, ctx);
+
+    proactiveLogSkip("tick", "global_cd");
+    proactiveLogFire("night_owl", "hello");
+    proactiveLogSkip("tick", "global_cd");
+
+    const logs = JSON.parse(store["pet_proactive_log"]);
+    assert.strictEqual(logs.length, 2);
+    assert.strictEqual(logs[0].type, "fire");
+    assert.strictEqual(logs[0].rule, "night_owl");
+    assert.strictEqual(logs[1].type, "skip");
+    assert.strictEqual(logs[1].gate, "tick");
+  });
+
+  test('buffer is capped at 20 entries (oldest dropped)', () => {
+    const { ctx, store } = createCtx();
+    const proactiveLogSkip = (gateName, reason) => vm.runInContext(`proactiveLogSkip("${gateName}", "${reason}")`, ctx);
+
+    for (let i = 0; i < 25; i++) {
+      proactiveLogSkip("scene", `reason_${i}`);
+    }
+    const logs = JSON.parse(store["pet_proactive_log"]);
+    assert.strictEqual(logs.length, 20);
+    assert.strictEqual(logs[0].reason, "reason_5");
+    assert.strictEqual(logs[19].reason, "reason_24");
+  });
+
+  test('corrupt localStorage JSON does not throw', () => {
+    const { ctx, store } = createCtx();
+    store["pet_proactive_log"] = "{ invalid json";
+
+    // Test skip
+    const proactiveLogSkip = (gateName, reason) => vm.runInContext(`proactiveLogSkip("${gateName}", "${reason}")`, ctx);
+    assert.doesNotThrow(() => {
+      proactiveLogSkip("tick", "disabled");
+    });
+
+    store["pet_proactive_log"] = "{ invalid json";
+
+    // Test fire
+    const proactiveLogFire = (ruleId, prompt) => vm.runInContext(`proactiveLogFire("${ruleId}", "${prompt}")`, ctx);
+    assert.doesNotThrow(() => {
+      proactiveLogFire("welcome_back", "welcome!");
+    });
+  });
+});
