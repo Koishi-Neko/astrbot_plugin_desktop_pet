@@ -867,9 +867,9 @@ class DesktopPetBridge(Star):
 
             columns = [row[1] for row in cur.execute("PRAGMA table_info(provider_stats)").fetchall()]
 
-            has_timestamp = "timestamp" in columns
+            has_timestamp = "created_at" in columns or "timestamp" in columns
             has_input = "token_input_other" in columns
-            has_cached = "token_cached" in columns
+            has_cached = "token_input_cached" in columns or "token_cached" in columns
             has_output = "token_output" in columns
             has_ttft = "time_to_first_token" in columns
 
@@ -888,23 +888,24 @@ class DesktopPetBridge(Star):
                 row_dict = dict(zip(columns, row))
 
                 is_today = False
-                if has_timestamp and row_dict.get("timestamp"):
-                    ts = row_dict["timestamp"]
-                    try:
-                        if isinstance(ts, str):
-                            try:
-                                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            except ValueError:
-                                dt = datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
-                        else:
-                            dt = datetime.fromtimestamp(float(ts))
-                        if dt.date() == today:
-                            is_today = True
-                    except Exception:
-                        pass
+                if has_timestamp:
+                    ts = row_dict.get("created_at") or row_dict.get("timestamp")
+                    if ts:
+                        try:
+                            if isinstance(ts, str):
+                                try:
+                                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                except ValueError:
+                                    dt = datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                            else:
+                                dt = datetime.fromtimestamp(float(ts))
+                            if dt.date() == today:
+                                is_today = True
+                        except Exception:
+                            pass
 
                 input_other = row_dict.get("token_input_other")
-                cached = row_dict.get("token_cached")
+                cached = row_dict.get("token_input_cached") or row_dict.get("token_cached")
                 output = row_dict.get("token_output")
                 ttft = row_dict.get("time_to_first_token")
 
