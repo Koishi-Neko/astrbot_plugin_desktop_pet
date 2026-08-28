@@ -971,6 +971,35 @@ let micAutoSendTimer = null;
 let micCancelAutoSend = false;
 
 const micBtn = $("mic-btn");
+const micWaveform = $("mic-waveform");
+let micWaveformCtx = null;
+let micRmsHistory = new Array(30).fill(0); // For 60px width, 2px per bar
+let micAnimFrame = null;
+
+function drawWaveform() {
+  if (!micWaveformCtx && micWaveform) {
+    micWaveformCtx = micWaveform.getContext("2d");
+  }
+  if (!micWaveformCtx) return;
+  const ctx = micWaveformCtx;
+  const w = micWaveform.width;
+  const h = micWaveform.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#e53935";
+  const barW = w / micRmsHistory.length;
+  for (let i = 0; i < micRmsHistory.length; i++) {
+    const rms = micRmsHistory[i];
+    // max expected rms for normal speech is ~0.1 to 0.3
+    const barH = Math.min(h, Math.max(2, (rms / 0.15) * h));
+    const x = i * barW;
+    const y = (h - barH) / 2;
+    ctx.fillRect(x, y, barW - 1, barH);
+  }
+  if (micRecording) {
+    micAnimFrame = requestAnimationFrame(drawWaveform);
+  }
+}
+
 
 // AudioWorklet 采集处理器：mic-worklet.js（真实文件走 'self'，CSP 无需放开 blob:）
 const MIC_WORKLET_URL = "mic-worklet.js";
@@ -1044,9 +1073,20 @@ async function startMicRecording() {
   micStartTime = Date.now();
   micNoiseFloor = 0.01;
   micBtn.classList.add("recording");
+  if (micWaveform) micWaveform.classList.remove("hidden");
+  micRmsHistory.fill(0);
+  if (micAnimFrame) cancelAnimationFrame(micAnimFrame);
+  drawWaveform();
+  chatInput.classList.add("mic-recording");
+
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+      audio: (() => {
+        const savedDevice = localStorage.getItem("pet_mic_device");
+        const constraints = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
+        if (savedDevice) constraints.deviceId = { exact: savedDevice };
+        return constraints;
+      })(),
     });
     micContext = new AudioContext();
     if (!micContext.audioWorklet) throw new Error("AudioWorklet 不支持");
@@ -1071,6 +1111,9 @@ function stopMicRecording() {
   micRecording = false;
   clearTimeout(micCapTimer);
   micBtn.classList.remove("recording");
+  if (micWaveform) micWaveform.classList.add("hidden");
+  if (micAnimFrame) cancelAnimationFrame(micAnimFrame);
+  chatInput.classList.remove("mic-recording");
   if (micWorklet) { try { micWorklet.disconnect(); micWorklet.port.close(); } catch (e) {} }
   if (micSource) { try { micSource.disconnect(); } catch (e) {} }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); }
@@ -1114,6 +1157,8 @@ function onMicAudioChunk(ev) {
     if (!micSpeechSeen && Date.now() - micStartTime > ASR_PRESPEECH_MAX_MS) {
       stopMicRecording();
     }
+    micRmsHistory.push(rms);
+    micRmsHistory.shift();
   }
 }
 
@@ -1145,7 +1190,12 @@ async function transcribeAndFill(wavB64) {
   showBubble();
   queueType("…");
   try {
-    const raw = await invoke()("asr_transcribe", { url: asrUrl(), wavB64 });
+    let url = asrUrl();
+    const prompt = localStorage.getItem("pet_asr_prompt");
+    if (prompt) {
+      url += (url.includes("?") ? "&" : "?") + "initial_prompt=" + encodeURIComponent(prompt);
+    }
+    const raw = await invoke()("asr_transcribe", { url, wavB64 });
     const data = JSON.parse(raw);
     const text = String((data && data.text) || "").trim();
     typeQueue.length = 0;
@@ -1417,6 +1467,9 @@ function syncModeSections() {
 $("cfg-mode").addEventListener("change", syncModeSections);
 
 $("menu-settings").addEventListener("click", () => {
+  populateMicDevices();
+  const asrPrompt = $("cfg-asr-prompt");
+  if (asrPrompt) asrPrompt.value = localStorage.getItem("pet_asr_prompt") || "";
   const cfg = loadConfig();
   $("cfg-base-url").value = cfg.baseUrl;
   $("cfg-api-key").value = cfg.apiKey;
@@ -1446,6 +1499,8 @@ $("menu-quit").addEventListener("click", () => {
 // 设置面板
 $("cfg-save").addEventListener("click", () => {
   const mode = $("cfg-mode").value;
+  const asrPrompt = $("cfg-asr-prompt");
+  if (asrPrompt) localStorage.setItem("pet_asr_prompt", asrPrompt.value);
   localStorage.setItem("pet_mode", mode);
   if (mode === "standalone") {
     saveStandaloneConfig();
@@ -2191,3 +2246,40 @@ setTimeout(reportStatus, 8000); // 启动后稍候上报首包
     queueType("你好呀！先在右键菜单「设置」里填好 AstrBot 地址和 API Key，我就能陪你聊天啦。");
   }
 })();
+
+async function populateMicDevices() {
+  const sel = $("cfg-mic-device");
+  if (!sel) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+    while (sel.options.length > 1) {
+      sel.remove(1);
+    }
+
+    audioInputs.forEach((device, index) => {
+      const label = device.label || `麦克风 ${index + 1}`;
+      if (device.deviceId || device.label) {
+         // Some browsers return empty deviceId but has label if permissions are weird.
+         // Actually enumerateDevices often returns deviceId even if label is empty.
+         // Wait, deviceId is usually present. If it's a default generic one, we use index.
+      }
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.text = label;
+      sel.appendChild(option);
+    });
+
+    const saved = localStorage.getItem("pet_mic_device");
+    if (saved) {
+      sel.value = saved;
+    }
+  } catch (e) {
+    console.warn("enumerateDevices failed:", e);
+  }
+}
+
+$("cfg-mic-device")?.addEventListener("change", (e) => {
+  localStorage.setItem("pet_mic_device", e.target.value);
+});

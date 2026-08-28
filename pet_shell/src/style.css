@@ -153,7 +153,7 @@ body {
 
 #chat-input {
   width: 100%;
-  padding: 8px 12px 8px 36px;
+  padding: 8px 12px 8px 36px; transition: padding 0.2s;
   border: 2px solid #ffb7d5;
   border-radius: 16px;
   outline: none;
@@ -429,4 +429,17 @@ body {
   color: #888;
   word-break: break-all;
   white-space: pre-wrap;
+}
+
+
+#mic-waveform {
+  position: absolute;
+  left: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-radius: 4px;
+  pointer-events: none;
+}
+#chat-input.mic-recording {
+  padding-left: 104px;
 }
