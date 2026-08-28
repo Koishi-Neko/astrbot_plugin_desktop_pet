@@ -9,7 +9,8 @@
     "predev": "python tools/fetch_vendor.py",
     "dev": "tauri dev",
     "prebuild": "python tools/fetch_vendor.py",
-    "build": "tauri build"
+    "build": "tauri build",
+    "test": "node --test"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
