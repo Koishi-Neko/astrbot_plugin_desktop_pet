@@ -99,6 +99,17 @@ def _strip_image_parts(history) -> int:
                 msg["content"] = kept if kept else "[图片]"
     return removed
 
+
+def _strip_think_parts(history) -> int:
+    removed = 0
+    for msg in history:
+        if not isinstance(msg, dict):
+            continue
+        if "reasoning_content" in msg:
+            del msg["reasoning_content"]
+            removed += 1
+    return removed
+
 PAGE_CONFIG_KEYS = (
     "master_name",
     "master_qq",
@@ -657,6 +668,7 @@ class DesktopPetBridge(Star):
         contexts = getattr(req, "contexts", None)
         if isinstance(contexts, list):
             _strip_image_parts(contexts)
+            _strip_think_parts(contexts)
 
     @staticmethod
     def _restore_pet_sender(event: AstrMessageEvent, sid: str) -> None:
@@ -780,19 +792,20 @@ class DesktopPetBridge(Star):
                 nxt += timedelta(days=1)
             await asyncio.sleep((nxt - now).total_seconds())
             try:
-                removed, saved = await asyncio.to_thread(self._gc_history_images)
-                if removed:
+                removed_img, removed_think, saved = await asyncio.to_thread(self._gc_history_images)
+                if removed_img or removed_think:
                     logger.info(
-                        f"[desktop_pet] history gc: stripped {removed} image parts, saved {saved} chars"
+                        f"[desktop_pet] history gc: stripped {removed_img} image parts, {removed_think} think parts, saved {saved} chars"
                     )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning(f"[desktop_pet] history gc failed: {e}")
 
-    def _gc_history_images(self) -> tuple[int, int]:
+    def _gc_history_images(self) -> tuple[int, int, int]:
         db_path = Path(__file__).resolve().parents[2] / "data_v4.db"
-        total_removed = 0
+        total_removed_img = 0
+        total_removed_think = 0
         total_saved = 0
         con = sqlite3.connect(str(db_path), timeout=30)
         try:
@@ -807,19 +820,21 @@ class DesktopPetBridge(Star):
                     continue
                 if not isinstance(history, list):
                     continue
-                removed = _strip_image_parts(history)
-                if removed:
+                removed_img = _strip_image_parts(history)
+                removed_think = _strip_think_parts(history)
+                if removed_img or removed_think:
                     new_content = json.dumps(history, ensure_ascii=False)
                     cur.execute(
                         "UPDATE conversations SET content=? WHERE conversation_id=?",
                         (new_content, cid),
                     )
-                    total_removed += removed
+                    total_removed_img += removed_img
+                    total_removed_think += removed_think
                     total_saved += len(content) - len(new_content)
             con.commit()
         finally:
             con.close()
-        return total_removed, total_saved
+        return total_removed_img, total_removed_think, total_saved
 
     def _qq_jp_dub_enabled(self) -> bool:
         return bool(self.config.get("qq_jp_dub_enabled", False))

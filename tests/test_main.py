@@ -1,5 +1,5 @@
 import pytest
-from main import _strip_image_parts, DesktopPetBridge
+from main import _strip_image_parts, _strip_think_parts, DesktopPetBridge
 
 def test_strip_image_parts_ignores_non_dicts():
     history = ["not a dict", 123, None]
@@ -87,3 +87,44 @@ def test_parse_blocklist_case_folding():
 
 def test_parse_blocklist_extra_whitespaces_and_empty_parts():
     assert DesktopPetBridge._parse_blocklist("a,, , b") == ["a", "b"]
+
+
+def test_strip_think_parts_ignores_non_dicts():
+    history = ["not a dict", 123, None]
+    original = list(history)
+    removed = _strip_think_parts(history)
+    assert removed == 0
+    assert history == original
+
+def test_strip_think_parts_missing_key():
+    history = [{"content": "hello"}, {"content": "world", "role": "user"}]
+    original = list(history)
+    removed = _strip_think_parts(history)
+    assert removed == 0
+    assert history == original
+
+def test_strip_think_parts_removes_key():
+    history = [
+        {"content": "hello", "reasoning_content": "thinking..."},
+        {"content": "world", "role": "assistant", "reasoning_content": "more thinking..."}
+    ]
+    removed = _strip_think_parts(history)
+    assert removed == 2
+    assert history == [
+        {"content": "hello"},
+        {"content": "world", "role": "assistant"}
+    ]
+
+def test_strip_think_parts_mixed():
+    history = [
+        "not dict",
+        {"content": "hello"},
+        {"content": "world", "reasoning_content": "thinking..."}
+    ]
+    removed = _strip_think_parts(history)
+    assert removed == 1
+    assert history == [
+        "not dict",
+        {"content": "hello"},
+        {"content": "world"}
+    ]
