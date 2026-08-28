@@ -1080,14 +1080,21 @@ async function startMicRecording() {
   chatInput.classList.add("mic-recording");
 
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: (() => {
-        const savedDevice = localStorage.getItem("pet_mic_device");
-        const constraints = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
-        if (savedDevice) constraints.deviceId = { exact: savedDevice };
-        return constraints;
-      })(),
-    });
+    let constraints = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
+    const savedDevice = localStorage.getItem("pet_mic_device");
+    if (savedDevice) constraints.deviceId = { exact: savedDevice };
+
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    } catch (e) {
+      if (e.name === "OverconstrainedError" || e.name === "NotFoundError") {
+        console.warn("[mic] 无法使用指定的麦克风设备，回退到默认设备:", e);
+        constraints = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+      } else {
+        throw e;
+      }
+    }
     micContext = new AudioContext();
     if (!micContext.audioWorklet) throw new Error("AudioWorklet 不支持");
     micSource = micContext.createMediaStreamSource(micStream);
@@ -1190,12 +1197,9 @@ async function transcribeAndFill(wavB64) {
   showBubble();
   queueType("…");
   try {
-    let url = asrUrl();
-    const prompt = localStorage.getItem("pet_asr_prompt");
-    if (prompt) {
-      url += (url.includes("?") ? "&" : "?") + "initial_prompt=" + encodeURIComponent(prompt);
-    }
-    const raw = await invoke()("asr_transcribe", { url, wavB64 });
+    const url = asrUrl();
+    const prompt = localStorage.getItem("pet_asr_prompt") || null;
+    const raw = await invoke()("asr_transcribe", { url, wavB64, initial_prompt: prompt });
     const data = JSON.parse(raw);
     const text = String((data && data.text) || "").trim();
     typeQueue.length = 0;
@@ -2260,11 +2264,7 @@ async function populateMicDevices() {
 
     audioInputs.forEach((device, index) => {
       const label = device.label || `麦克风 ${index + 1}`;
-      if (device.deviceId || device.label) {
-         // Some browsers return empty deviceId but has label if permissions are weird.
-         // Actually enumerateDevices often returns deviceId even if label is empty.
-         // Wait, deviceId is usually present. If it's a default generic one, we use index.
-      }
+
       const option = document.createElement("option");
       option.value = device.deviceId;
       option.text = label;
