@@ -33,6 +33,7 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 - **格式注入搬到壳端**：`sendChatStandalone` 本地拼 system prompt（人格 `standalone.persona` 或内置默认 → 身份说明 → `EMOTION_INSTRUCTION(_TTS)`，与 main.py 常量同文案）+ 用户消息尾格式提醒；会话历史为**内存环形缓冲 32 条**（重启即忘，无 LivingMemory）。
 - **proactive/scene 独立分支**：`fetchSceneConfig`/`reportStatus` 直接短路（无控制页）；scene 截图 base64 内联直传，视觉模型 = `scene_model` 留空则用对话模型。
 - TTS 直连：SBV2 监听 WSL `127.0.0.1:5000`，经 WSL2 localhost 转发，Windows `http://localhost:5000` 直连（2026-08-03 前曾用 socat 回环桥 5001，已退役）；地址留空/失败静默降级纯文字。
+- ASR 直连：语音输入默认请求本地 `http://127.0.0.1:5055`，可通过 `config.local.json` 的 `asr_url` 覆盖。
 - 注意：`config.local.json` 会被内嵌进 release exe（构建时快照），独立模式配置可经设置面板写入 localStorage（每用户生效）。
 
 ## 仓库结构
@@ -73,7 +74,7 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 - 钩子：`on_llm_request`（**priority=-10**，须后于记忆类插件等注入型插件执行，如 LivingMemory 的记忆召回注入）对桌宠会话注入【情绪】中文【JP】日语格式要求 + 主人身份改写；`on_decorating_result` 把 QQ 回复拆成 `Plain(中文)+Record(日语配音)`。
 - 身份改写：`_rewrite_pet_identity()` 改写当前请求 `extra_user_content_parts` + 历史 `contexts` + `req.prompt`/`system_prompt`（`provider_settings.identifier` 会把 `User ID: desktop_pet` 追加进每条用户消息，不改写模型会把用户叫成 desktop_pet）。
 - 长人格 prompt 会稀释 system 侧格式要求 → 在**用户消息末尾**补格式提醒（桌宠和 QQ 两侧都需要）。
-- 配置持久化：写回 `data/config/astrbot_plugin_desktop_pet_config.json` 即时生效；schema 中与控制页重叠的键全部 `invisible: true`，仅 `pet_session_id` 可见（内部常量，不应让用户改）。
+- 配置持久化：写回 `data/config/astrbot_plugin_desktop_pet_config.json` 即时生效；schema 包含新增的 `scene_provider`, `scene_blocklist`, `proactive_enabled`, `scene_enabled`, `scene_interval_min`, `voice_input_enabled`, `asr_url` 等。与控制页重叠的键全部 `invisible: true`，仅 `pet_session_id` 可见（内部常量，不应让用户改）。
 
 ## 桌宠壳（pet_shell）要点
 
@@ -109,7 +110,7 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 | `gen_assets.py` | 生成 8 张占位情绪 PNG 与图标（静态兜底用，可选） |
 | `start_all.ps1` / `stop_all.ps1` | 一键启停整套服务（WSL + AstrBot 容器 + 桌宠 exe）。**PowerShell 5.1 需 UTF-8 BOM 保存** |
 | `start_all.vbs` / `stop_all.vbs` | wscript 隐藏调起 ps1，无控制台窗口，日常双击用 |
-| `asr_server.py` | 语音输入 ASR 服务（whisper @ NPU，**封存待激活**，未接入启动项） |
+| `asr_server.py` | 语音输入 ASR 服务（whisper @ NPU，按需启动） |
 | `setup_sbv2_loopback.sh` | ~~socat 回环桥~~（已随 2026-08-03 退役：SBV2 改绑 127.0.0.1:5000 后壳端直连；脚本保留备用，回退 `systemctl disable --now sbv2-loopback`） |
 
 动作实验室：`cd pet_shell/src && python -m http.server 8765` 后开 `http://localhost:8765/lab/`（`probe.html` 为运行时参数探针）。
