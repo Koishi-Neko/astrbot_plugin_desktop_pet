@@ -107,6 +107,9 @@ async def transcribe(request: Request):
     t0 = time.time()
     try:
         options = {}
+        initial_prompt = request.query_params.get("initial_prompt")
+        if initial_prompt:
+            options["initial_prompt"] = initial_prompt
         if LANGUAGE:
             options["language"] = LANGUAGE
         result = pipe.generate(data.tolist(), **options)

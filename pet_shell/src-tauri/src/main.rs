@@ -781,7 +781,7 @@ async fn asr_health(url: String) -> Result<String, String> {
 
 /// 语音输入转写：上传 WAV 字节（b64）到本地 ASR 服务，返回 JSON {"text", "elapsed_s", "audio_s"}。
 #[tauri::command]
-async fn asr_transcribe(url: String, wav_b64: String) -> Result<String, String> {
+async fn asr_transcribe(url: String, wav_b64: String, initial_prompt: Option<String>) -> Result<String, String> {
     use base64::Engine;
     let wav = base64::engine::general_purpose::STANDARD
         .decode(&wav_b64)
@@ -796,9 +796,11 @@ async fn asr_transcribe(url: String, wav_b64: String) -> Result<String, String> 
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(endpoint)
-        .header("Content-Type", "application/octet-stream")
+    let mut req = client.post(endpoint).header("Content-Type", "application/octet-stream");
+    if let Some(p) = initial_prompt {
+        req = req.query(&[("initial_prompt", p)]);
+    }
+    let resp = req
         .body(wav)
         .send()
         .await
