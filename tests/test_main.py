@@ -128,3 +128,76 @@ def test_strip_think_parts_mixed():
         {"content": "hello"},
         {"content": "world"}
     ]
+
+import sqlite3
+import pytest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+from datetime import datetime
+
+def test_get_provider_stats_no_file(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path.return_value = mock_path_obj
+
+        # db does not exist
+        res = bridge._get_provider_stats()
+        assert res == {"has_data": False}
+
+def test_get_provider_stats_no_table(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    db_file = tmp_path / "data_v4.db"
+    con = sqlite3.connect(str(db_file))
+    con.close()
+
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path_obj.__truediv__.return_value = db_file
+        mock_path.return_value = mock_path_obj
+
+        res = bridge._get_provider_stats()
+        assert res == {"has_data": False}
+
+def test_get_provider_stats_normal(tmp_path):
+    bridge = DesktopPetBridge(MagicMock())
+    db_file = tmp_path / "data_v4.db"
+    con = sqlite3.connect(str(db_file))
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE provider_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            token_input_other INTEGER,
+            token_cached INTEGER,
+            token_output INTEGER,
+            time_to_first_token REAL
+        )
+    """)
+    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("INSERT INTO provider_stats (timestamp, token_input_other, token_cached, token_output, time_to_first_token) VALUES (?, 10, 5, 20, 1.5)", (today_str,))
+    cur.execute("INSERT INTO provider_stats (timestamp, token_input_other, token_cached, token_output, time_to_first_token) VALUES (?, 30, 0, 40, 2.5)", ("2000-01-01 12:00:00",))
+    con.commit()
+    con.close()
+
+    with patch("main.Path") as mock_path:
+        mock_path_obj = MagicMock()
+        mock_path_obj.resolve.return_value.parents = [None, None, tmp_path]
+        mock_path_obj.__truediv__.return_value = db_file
+        mock_path.return_value = mock_path_obj
+
+        res = bridge._get_provider_stats()
+        assert res["has_data"] is True
+        stats = res["stats"]
+
+        assert stats["all_time"]["input"] == 40
+        assert stats["all_time"]["cached"] == 5
+        assert stats["all_time"]["output"] == 60
+        assert stats["all_time"]["ttft_avg"] == 2.0
+
+        assert stats["today"]["input"] == 10
+        assert stats["today"]["cached"] == 5
+        assert stats["today"]["output"] == 20
+        assert stats["today"]["ttft_avg"] == 1.5

@@ -234,6 +234,12 @@ class DesktopPetBridge(Star):
             ["GET", "POST"],
             "桌宠控制页：读写语音输入配置（开关/ASR 地址）",
         )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/token_stats",
+            self.page_token_stats,
+            ["GET"],
+            "桌宠控制页：获取 Token 统计",
+        )
         logger.info(
             "[desktop_pet] web api registered: desktop_pet/pet/*, desktop_pet/page/*"
         )
@@ -641,6 +647,9 @@ class DesktopPetBridge(Star):
         self._persist_config()
         return {"saved": True, "updated": updated}
 
+    async def page_token_stats(self):
+        return await asyncio.to_thread(self._get_provider_stats)
+
     # ---------- 管道模式：给桌宠 webchat 会话追加输出格式要求 ----------
 
     # priority=10：先于 LivingMemory（priority 0）执行。LivingMemory 在 on_llm_request
@@ -835,6 +844,112 @@ class DesktopPetBridge(Star):
         finally:
             con.close()
         return total_removed_img, total_removed_think, total_saved
+
+    def _get_provider_stats(self) -> dict:
+        db_path = Path(__file__).resolve().parents[2] / "data_v4.db"
+        if not db_path.exists():
+            return {"has_data": False}
+
+        try:
+            # Safely open as read-only, fallback to standard connect if URI mode fails
+            try:
+                con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            except Exception:
+                con = sqlite3.connect(str(db_path), timeout=5)
+        except Exception:
+            return {"has_data": False}
+
+        try:
+            cur = con.cursor()
+            tables = [row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            if "provider_stats" not in tables:
+                return {"has_data": False}
+
+            columns = [row[1] for row in cur.execute("PRAGMA table_info(provider_stats)").fetchall()]
+
+            has_timestamp = "timestamp" in columns
+            has_input = "token_input_other" in columns
+            has_cached = "token_cached" in columns
+            has_output = "token_output" in columns
+            has_ttft = "time_to_first_token" in columns
+
+            if not (has_input and has_output):
+                return {"has_data": False}
+
+            rows = cur.execute("SELECT * FROM provider_stats").fetchall()
+            today = datetime.now().date()
+
+            stats = {
+                "all_time": {"input": 0, "cached": 0, "output": 0, "ttft_sum": 0.0, "ttft_count": 0},
+                "today": {"input": 0, "cached": 0, "output": 0, "ttft_sum": 0.0, "ttft_count": 0}
+            }
+
+            for row in rows:
+                row_dict = dict(zip(columns, row))
+
+                is_today = False
+                if has_timestamp and row_dict.get("timestamp"):
+                    ts = row_dict["timestamp"]
+                    try:
+                        if isinstance(ts, str):
+                            try:
+                                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            except ValueError:
+                                dt = datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                        else:
+                            dt = datetime.fromtimestamp(float(ts))
+                        if dt.date() == today:
+                            is_today = True
+                    except Exception:
+                        pass
+
+                input_other = row_dict.get("token_input_other")
+                cached = row_dict.get("token_cached")
+                output = row_dict.get("token_output")
+                ttft = row_dict.get("time_to_first_token")
+
+                try: input_other = int(input_other) if input_other is not None else 0
+                except Exception: input_other = 0
+
+                try: cached = int(cached) if cached is not None else 0
+                except Exception: cached = 0
+
+                try: output = int(output) if output is not None else 0
+                except Exception: output = 0
+
+                try: ttft = float(ttft) if ttft is not None else 0.0
+                except Exception: ttft = 0.0
+
+                stats["all_time"]["input"] += input_other
+                stats["all_time"]["cached"] += cached
+                stats["all_time"]["output"] += output
+                if ttft > 0:
+                    stats["all_time"]["ttft_sum"] += ttft
+                    stats["all_time"]["ttft_count"] += 1
+
+                if is_today:
+                    stats["today"]["input"] += input_other
+                    stats["today"]["cached"] += cached
+                    stats["today"]["output"] += output
+                    if ttft > 0:
+                        stats["today"]["ttft_sum"] += ttft
+                        stats["today"]["ttft_count"] += 1
+
+            for key in ["all_time", "today"]:
+                if stats[key]["ttft_count"] > 0:
+                    stats[key]["ttft_avg"] = round(stats[key]["ttft_sum"] / stats[key]["ttft_count"], 2)
+                else:
+                    stats[key]["ttft_avg"] = 0.0
+                del stats[key]["ttft_sum"]
+                del stats[key]["ttft_count"]
+
+            return {"has_data": True, "stats": stats}
+
+        except Exception as e:
+            logger.warning(f"[desktop_pet] provider_stats aggregation failed: {e}")
+            return {"has_data": False}
+        finally:
+            con.close()
 
     def _qq_jp_dub_enabled(self) -> bool:
         return bool(self.config.get("qq_jp_dub_enabled", False))
