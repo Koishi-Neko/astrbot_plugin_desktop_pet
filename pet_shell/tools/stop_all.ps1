@@ -13,7 +13,7 @@ if ($pet) {
 }
 
 Write-Output "[2/4] 停止本地 ASR 服务（语音输入）..."
-$asr = Get-NetTCPConnection -LocalPort 5055 -State Listen -ErrorAction SilentlyContinue
+$asr = Get-NetTCPConnection -LocalPort $(if ($env:ASR_PORT) { [int]$env:ASR_PORT } else { 15055 }) -State Listen -ErrorAction SilentlyContinue
 if ($asr) {
     $asrPid = ($asr | Select-Object -First 1).OwningProcess
     Stop-Process -Id $asrPid -Force -ErrorAction SilentlyContinue

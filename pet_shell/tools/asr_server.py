@@ -38,7 +38,7 @@ MODEL_DIR = os.environ.get(
     ),
 )
 HOST = os.environ.get("ASR_HOST", "127.0.0.1")
-PORT = int(os.environ.get("ASR_PORT", "5055"))
+PORT = int(os.environ.get("ASR_PORT", "15055"))
 DEVICE = os.environ.get("ASR_DEVICE", "NPU")
 # 显式锁定识别语言：openvino-genai WhisperPipeline 跨请求持有语言状态
 # （EN 请求后中文会被"翻译"成英文，实测粘性 bug），默认固定 <|zh|>；
@@ -112,7 +112,17 @@ async def transcribe(request: Request):
             options["initial_prompt"] = initial_prompt
         if LANGUAGE:
             options["language"] = LANGUAGE
-        result = pipe.generate(data.tolist(), **options)
+        result = None
+        try:
+            result = pipe.generate(data.tolist(), **options)
+        except Exception:
+            if "initial_prompt" not in options:
+                raise
+            # NPU 静态形状管道不支持 initial_prompt（OpenVINO make_tensor roi_end 校验
+            # 失败），降级为不带热词重试——宁可识别不准也不能让语音输入整体 500
+            print("[asr] initial_prompt 推理失败，降级重试（不带热词）", flush=True)
+            options.pop("initial_prompt")
+            result = pipe.generate(data.tolist(), **options)
         text = str(result).strip()
     except Exception as e:
         return JSONResponse({"error": f"inference failed: {e}"}, status_code=500)

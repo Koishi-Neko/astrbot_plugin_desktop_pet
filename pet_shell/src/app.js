@@ -929,9 +929,9 @@ async function sendChat(text, opts = {}) {
   }
 }
 
-// ---------- 语音输入（本地 ASR @ 127.0.0.1:5055，whisper @ NPU） ----------
+// ---------- 语音输入（本地 ASR @ 127.0.0.1:15055，whisper @ NPU） ----------
 
-const ASR_DEFAULT_URL = "http://127.0.0.1:5055";
+const ASR_DEFAULT_URL = "http://127.0.0.1:15055";
 const ASR_MAX_MS = 30000; // 硬上限
 const ASR_SILENCE_MS = 1200; // 说话后静音自动截止
 const ASR_PRESPEECH_MAX_MS = 8000; // 一直没检测到说话时提前放弃

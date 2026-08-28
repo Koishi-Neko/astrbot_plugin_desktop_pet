@@ -33,7 +33,7 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 - **格式注入搬到壳端**：`sendChatStandalone` 本地拼 system prompt（人格 `standalone.persona` 或内置默认 → 身份说明 → `EMOTION_INSTRUCTION(_TTS)`，与 main.py 常量同文案）+ 用户消息尾格式提醒；会话历史为**内存环形缓冲 32 条**（重启即忘，无 LivingMemory）。
 - **proactive/scene 独立分支**：`fetchSceneConfig`/`reportStatus` 直接短路（无控制页）；scene 截图 base64 内联直传，视觉模型 = `scene_model` 留空则用对话模型。
 - TTS 直连：SBV2 监听 WSL `127.0.0.1:5000`，经 WSL2 localhost 转发，Windows `http://localhost:5000` 直连（2026-08-03 前曾用 socat 回环桥 5001，已退役）；地址留空/失败静默降级纯文字。
-- ASR 直连：语音输入默认请求本地 `http://127.0.0.1:5055`，可通过 `config.local.json` 的 `asr.url` 覆盖。
+- ASR 直连：语音输入默认请求本地 `http://127.0.0.1:15055`，可通过 `config.local.json` 的 `asr.url` 覆盖；热词 `initial_prompt` 经 query 传入，NPU 静态形状不支持时服务端降级为无热词重试（2026-08-28 实测 OpenVINO make_tensor roi_end 校验崩溃）。
 - 注意：`config.local.json` 会被内嵌进 release exe（构建时快照），独立模式配置可经设置面板写入 localStorage（每用户生效）。
 
 ## 仓库结构

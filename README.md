@@ -77,7 +77,7 @@
 | --- | --- | --- |
 | 聊天 / 情绪标签 / 表情切换 | ✅ | ✅ |
 | 日语配音（需本机部署 SBV2） | ✅ | ✅（TTS 地址可配） |
-| 语音输入（需本地 ASR 服务） | ✅（开关/地址控制页配置） | ✅（默认 5055，config.local.json 可配） |
+| 语音输入（需本地 ASR 服务） | ✅（开关/地址控制页配置） | ✅（默认 15055，config.local.json 可配） |
 | 主动对话 / 桌面感知 | ✅ | ✅（截图内联直传，视觉模型=对话模型或单独指定） |
 | 会话人格 | WebUI 控制页 | 设置面板「人格」文本（留空用内置默认） |
 | 长期记忆（LivingMemory） | ✅（可选插件） | ❌（V1 无） |
@@ -98,7 +98,7 @@
     "scene_model": "可选，桌面感知视觉模型，留空=用对话模型"
   },
   "asr": {
-    "url": "http://127.0.0.1:5055"
+    "url": "http://127.0.0.1:15055"
   }
 }
 ```
@@ -129,8 +129,9 @@
 打开输入栏，点左侧圆形麦克风按钮开始录音（红色呼吸动画），再点一次或说话后静音 1.2 秒自动停止，识别结果回填输入框，0.5 秒后自动发送（点输入框/键盘可取消）。录音中暂停视线跟随与待机动作。
 
 - **识别引擎**：本地 whisper（OpenVINO，默认跑 Intel NPU），识别文本自动发送后走完整对话管线（人格/记忆/情绪/日语配音零改动）。
-- **服务部署**：ASR 服务为 Windows 本地进程（`tools/asr_server.py`，FastAPI `http://127.0.0.1:5055`），需要 Python 3.12 + `openvino-genai` 与 whisper 模型（`whisper-large-v3-turbo-fp16-ov`，OpenVINO 官方转换版）。首次启动 NPU 模型编译约 4 分钟，期间麦克风按钮灰态，就绪后自动恢复。
-- **开关与地址**：AstrBot 模式在插件控制页「语音输入」卡配置（启用开关 + 识别服务地址），壳端约 2 分钟内拉取生效；独立模式默认 `http://127.0.0.1:5055`，可用 `config.local.json` 的 `asr` 节覆盖。
+- **服务部署**：ASR 服务为 Windows 本地进程（`tools/asr_server.py`，FastAPI `http://127.0.0.1:15055`），需要 Python 3.12 + `openvino-genai` 与 whisper 模型（`whisper-large-v3-turbo-fp16-ov`，OpenVINO 官方转换版）。首次启动 NPU 模型编译约 4 分钟，期间麦克风按钮灰态，就绪后自动恢复。
+- **开关与地址**：AstrBot 模式在插件控制页「语音输入」卡配置（启用开关 + 识别服务地址），壳端约 2 分钟内拉取生效；独立模式默认 `http://127.0.0.1:15055`，可用 `config.local.json` 的 `asr` 节覆盖。
+- **热词提示词**：设置面板可填 `initial_prompt` 引导专有名词识别；NPU 静态形状管道不支持时服务端自动降级为不带热词重试，语音输入不受影响。
 - **默认停止**：ASR 服务不随桌宠自启，需要时运行 `pet_shell/tools/start_asr.ps1`（或双击 `start_asr.vbs`，幂等可重复跑；日志 `asr-npu\asr.log`）。`stop_all.ps1` 会一并停止。
 - 识别语言锁定中文（英文语音也能正确转写）；隐私：音频仅在本机处理，不上传。
 
@@ -195,7 +196,7 @@ npm run build   # 产出独立 exe：src-tauri/target/release/pet_shell.exe
     "tts_url": "http://localhost:5000"
   },
   "asr": {
-    "url": "http://127.0.0.1:5055"
+    "url": "http://127.0.0.1:15055"
   }
 }
 ```

@@ -700,7 +700,7 @@ async fn pet_tts_sbv2(
     Ok(serde_json::json!({"audio": b64, "format": "wav"}).to_string())
 }
 
-// ---------- 语音输入（本地 ASR @ 127.0.0.1:5055，whisper @ NPU） ----------
+// ---------- 语音输入（本地 ASR @ 127.0.0.1:15055，whisper @ NPU） ----------
 
 /// 授予 WebView2 麦克风权限（tauri.localhost / dev 地址），启动时调用一次；
 /// 失败仅记日志（WebView2 系统弹窗兜底）。

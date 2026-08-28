@@ -77,7 +77,7 @@ No AstrBot? No problem: **Settings → Mode → Standalone** makes the pet talk 
 | --- | --- | --- |
 | Chat / emotion tags / expression switching | ✅ | ✅ |
 | Japanese voice (needs local SBV2) | ✅ | ✅ (TTS URL configurable) |
-| Voice input (needs local ASR service) | ✅ (switch/URL on control page) | ✅ (default 5055, `config.local.json` overridable) |
+| Voice input (needs local ASR service) | ✅ (switch/URL on control page) | ✅ (default 15055, `config.local.json` overridable) |
 | Proactive chat / scene awareness | ✅ | ✅ (screenshots sent inline; vision model = chat model or separate) |
 | Conversation persona | WebUI control page | Settings "persona" text (built-in default if empty) |
 | Long-term memory (LivingMemory) | ✅ (optional plugin) | ❌ (not in V1) |
@@ -98,7 +98,7 @@ Configuration (settings panel "Standalone" section, or the `standalone` block of
     "scene_model": "optional vision model for scene awareness; empty = chat model"
   },
   "asr": {
-    "url": "http://127.0.0.1:5055"
+    "url": "http://127.0.0.1:15055"
   }
 }
 ```
@@ -129,8 +129,9 @@ Replies then become "Chinese bubble + Japanese sentence-by-sentence voice + mout
 Open the input bar and hit the round mic button on the left to start recording (red breathing animation); tap again or pause for 1.2 s of silence to stop. The transcription is filled into the input bar and auto-sent after 0.5 s (click the input / press a key to cancel). Gaze-following and idle motions pause while recording.
 
 - **Engine**: local whisper (OpenVINO, Intel NPU by default). Recognized text goes through the full chat pipeline (persona / memory / emotion / Japanese dubbing) unchanged.
-- **Service**: a Windows-side process (`tools/asr_server.py`, FastAPI at `http://127.0.0.1:5055`) requiring Python 3.12 + `openvino-genai` and a whisper model (`whisper-large-v3-turbo-fp16-ov`, OpenVINO official export). First NPU compile takes ~4 minutes; the mic button stays grey and recovers automatically.
-- **Switch & URL**: in AstrBot mode, configure them in the control page "Voice input" card (the shell pulls within ~2 minutes); in standalone mode the default is `http://127.0.0.1:5055`, overridable via the `asr` block of `config.local.json`.
+- **Service**: a Windows-side process (`tools/asr_server.py`, FastAPI at `http://127.0.0.1:15055`) requiring Python 3.12 + `openvino-genai` and a whisper model (`whisper-large-v3-turbo-fp16-ov`, OpenVINO official export). First NPU compile takes ~4 minutes; the mic button stays grey and recovers automatically.
+- **Switch & URL**: in AstrBot mode, configure them in the control page "Voice input" card (the shell pulls within ~2 minutes); in standalone mode the default is `http://127.0.0.1:15055`, overridable via the `asr` block of `config.local.json`.
+- **Hotwords**: an optional `initial_prompt` in the settings panel steers recognition of proper nouns; if the NPU static-shape pipeline rejects it, the server retries without it automatically — voice input never breaks.
 - **Stopped by default**: the ASR service is not auto-started; run `pet_shell/tools/start_asr.ps1` (or double-click `start_asr.vbs`, idempotent; logs in `asr-npu\asr.log`) when needed. `stop_all.ps1` stops it too.
 - Recognition is locked to Chinese (English speech still transcribes correctly); audio never leaves your machine.
 
@@ -195,7 +196,7 @@ You can preset configuration via `pet_shell/src/config.local.json` (gitignored; 
     "tts_url": "http://localhost:5000"
   },
   "asr": {
-    "url": "http://127.0.0.1:5055"
+    "url": "http://127.0.0.1:15055"
   }
 }
 ```

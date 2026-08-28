@@ -134,7 +134,7 @@ ASR_CONFIG_KEYS = (
 DEFAULT_PROACTIVE_ENABLED = True
 DEFAULT_SCENE_ENABLED = False
 DEFAULT_SCENE_INTERVAL_MIN = 30
-DEFAULT_ASR_URL = "http://127.0.0.1:5055"
+DEFAULT_ASR_URL = "http://127.0.0.1:15055"
 DEFAULT_SCENE_BLOCKLIST = (
     "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, "
     "qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, "
