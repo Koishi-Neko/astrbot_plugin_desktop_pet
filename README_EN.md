@@ -152,6 +152,8 @@ You can also **upload models directly** (no code changes): drop a model folder o
 
 The bundled default model **Momose Hiyori** is Live2D's official free sample (license: see `ReadMe.txt` in the model folder and the [official license page](https://www.live2d.com/zh-CHS/download/sample-data/)). Do not commit custom models to the repo (the folder is gitignored).
 
+> ⚠️ This release does not include any model files except the bundled official sample model Momose Hiyori.
+
 ## Controls
 
 | Action | Effect |

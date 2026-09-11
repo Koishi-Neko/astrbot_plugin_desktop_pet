@@ -45,6 +45,9 @@ jobs:
           projectPath: pet_shell
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "AstrBotPet ${{ inputs.tag || github.ref_name }}"
+          releaseBody: |
+            本发行版不含模型本体，仅内置官方示例模型桃濑日和。
+            This release does not include any model files except the bundled official sample model Momose Hiyori.
           args: --bundles nsis
 
       - name: Zip portable exe
