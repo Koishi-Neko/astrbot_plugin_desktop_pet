@@ -146,6 +146,7 @@ const MODELS = {
   chino: { name: "智乃", url: "assets/live2d/chino/chino.model3.json" },
   chino_q: { name: "智乃Q版", url: "assets/live2d/chino_q/chino_q.model3.json" },
   ariu: { name: "阿露", url: "assets/live2d/ariu/ariu.model3.json" },
+  nori: { name: "Nori", url: "assets/live2d/nori/nori.model3.json" },
   hiyori: { name: "桃濑日和", url: "assets/live2d/hiyori/hiyori.model3.json" },
 };
 
@@ -199,6 +200,38 @@ const MODEL_PROFILES = {
     pokeExprs: ["happy", "dizzy_eyes", "playful", "hat", "gamepad"],
     idleMotions: ["ear_perk", "ear_wiggle", "twist", "curious", "ear_fold", "nod", "tilt", "sway"],
     idleExprs: ["playful", "happy"], // 待机随机闪 wink/笑（currentIdleActions 支持 idleExprs）
+  },
+  nori: {
+    // Nori（ARGNori_web 变体，moc3=Cubism 5）：原生 16 表情 + 5 动作组；
+    // Reactions 组序：0=Nod 1=ShakeHead 2=WakuWaku 3=Angry 4=Troubled 5=Dizzy；
+    // Background(背身)/Effects(Glitch)/Poses 不进互动池；情绪除变脸外联动对应反应动作
+    expressions: {
+      "平静": null,
+      "高兴": "13_Happy",
+      "生气": "03_Angry",
+      "害羞": "04_Shy",
+      "惊讶": "14_Surprised",
+      "难过": "08_Tears",
+      "疑惑": "10_Doubt",
+      "调皮": "01_KiraKira",
+    },
+    emotionMotions: {
+      "高兴": ["Reactions", 2],
+      "生气": ["Reactions", 3],
+      "害羞": ["Reactions", 0],
+      "惊讶": ["Reactions", 5],
+      "难过": ["Reactions", 4],
+      "疑惑": ["Reactions", 1],
+      "调皮": ["Reactions", 2],
+    },
+    idleMotion: "Idle", // Idle[0]=01_Idle_Loop（含眨眼曲线）；Idle[1]=sleep_Loop 留给长待机
+    coinSway: false,
+    longIdleMotion: ["Idle", 1], // 长待机演出：睡眠循环（兜底 62s 后自动回待机）
+    longIdleExpr: "Sleep",
+    pokeMotions: ["Reactions"], // 组内随机：点头/摇头/搓手/生气/困扰/晕
+    pokeExprs: ["07_Smile", "04_Shy", "14_Surprised", "01_KiraKira"],
+    idleMotions: ["Reactions"],
+    idleExprs: ["07_Smile", "13_Happy"],
   },
   hiyori: {
     expressions: null, // 无表情文件，情绪仅走气泡/语音
@@ -255,7 +288,8 @@ function attachModel(model, usedKey) {
   fitModel = fit;
   live2dModel = model;
   avatar.classList.add("hidden"); // Live2D 就绪后隐藏静态立绘
-  if (activeProfile.idleMotion) model.motion(activeProfile.idleMotion).catch(() => {}); // 待机动作
+  // 待机动作（显式 index 0：Nori 的 Idle 组 index 1 是 sleep_Loop，随机起手会开局睡觉）
+  if (activeProfile.idleMotion) model.motion(activeProfile.idleMotion, 0).catch(() => {});
   // 任何动作播完都回到待机循环；长待机演出自然结束时复位演出状态
   // 注意两点：
   // 1. motionFinish 只在 internalModel.motionManager 上派发（Live2DModel 不转发）；
@@ -423,6 +457,9 @@ function playEmotionMotion(label) {
     } else {
       resetExpression();
     }
+    // 可选：情绪联动反应动作（档案配 emotionMotions 时启用，如 Nori）
+    const em = activeProfile.emotionMotions && activeProfile.emotionMotions[label];
+    if (em) live2dModel.motion(em[0], em[1]).catch(() => {});
   } catch (e) {
     console.warn("切换表情失败：", label, e);
   }
@@ -1723,22 +1760,26 @@ let lastChatAt = Date.now(); // 最近一次对话时间，25s 无对话保底�
 let lastRealChatAt = 0; // 真实发言时间（启动不占位）：驱动主动对话 45min 节流，与 coin_sway 解耦
 const LONG_IDLE_TRIGGER_MS = 25000;
 
-// 长待机演出为 60s 单次动作（末尾 4s 曲线内淡出），播完经 motionFinish 平滑回待机；
-// 对话/戳一戳均不打断。仅智乃档案启用（coin_sway 是其专属程序化动作）
+// 长待机演出：智乃/阿露为 60s coin_sway 单次动作（末尾 4s 曲线内淡出），播完经 motionFinish 平滑回待机；
+// Nori 为 sleep_Loop 睡眠循环 + Sleep 表情（循环动作不派发 motionFinish，靠下方 62s 兜底结束）。
+// 对话/戳一戳均不打断。档案配 coinSway 或 longIdleMotion 时启用
 function enterLongIdle() {
-  if (!activeProfile.coinSway) return;
+  const show =
+    activeProfile.longIdleMotion || (activeProfile.coinSway ? ["coin_sway", 0] : null);
+  if (!show) return;
   longIdleActive = true;
   console.log("[idle] 进入长待机演出");
-  live2dModel.motion("coin_sway", 0, PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+  live2dModel.motion(show[0], show[1], PIXI.live2d.MotionPriority.FORCE).catch(() => {});
+  if (activeProfile.longIdleExpr) live2dModel.expression(activeProfile.longIdleExpr);
   clearTimeout(coinIdleTimer);
   // 兜底：正常情况下由 motionFinish 复位，此处防止意外卡死
   coinIdleTimer = setTimeout(exitLongIdle, 62000);
 }
 
-// 保底触发：25s 无对话自动进入演出（对话中与演出中不触发；无 coin_sway 能力的模型跳过）
+// 保底触发：25s 无对话自动进入演出（对话中与演出中不触发；无演出能力的模型跳过）
 setInterval(() => {
   if (
-    activeProfile.coinSway &&
+    (activeProfile.coinSway || activeProfile.longIdleMotion) &&
     live2dModel &&
     !sending &&
     !micRecording &&
@@ -1758,6 +1799,12 @@ function exitLongIdle() {
     live2dModel
       .motion(activeProfile.idleMotion, 0, PIXI.live2d.MotionPriority.FORCE)
       .catch(() => {});
+    // 演出带表情（如 Nori 的 Sleep）时恢复到当前情绪表情
+    if (activeProfile.longIdleExpr && activeProfile.expressions) {
+      const expr = activeProfile.expressions[currentEmotion];
+      if (expr) live2dModel.expression(expr);
+      else resetExpression();
+    }
   }
 }
 
