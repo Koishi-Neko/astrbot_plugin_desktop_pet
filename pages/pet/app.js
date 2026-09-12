@@ -311,6 +311,8 @@ async function loadSceneConfig() {
   $("scene-interval").value = String(cfg.scene_interval_min || 30);
   $("scene-provider").value = cfg.scene_provider || "";
   $("scene-blocklist").value = cfg.scene_blocklist || "";
+  $("intent-perceive-enabled").checked = cfg.intent_perceive_enabled !== false;
+  $("intent-perceive-keywords").value = cfg.intent_perceive_keywords || "";
   sceneProviders = cfg.providers || [];
   const dl = $("provider-list");
   dl.innerHTML = "";
@@ -334,6 +336,8 @@ async function saveSceneConfig() {
       scene_interval_min: Number($("scene-interval").value),
       scene_provider: $("scene-provider").value.trim(),
       scene_blocklist: $("scene-blocklist").value.trim(),
+      intent_perceive_enabled: $("intent-perceive-enabled").checked,
+      intent_perceive_keywords: $("intent-perceive-keywords").value,
     });
     $("scene-save-msg").textContent = "已保存，壳端约 2 分钟内拉取生效。";
     refreshStatus();

@@ -120,6 +120,14 @@
           <span class="label">禁止抓取进程</span>
           <textarea id="scene-blocklist" rows="3" spellcheck="false" placeholder="逗号分隔的小写进程名；名单内进程在前台时不截图"></textarea>
         </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="intent-perceive-enabled" />
+          <span>启用指令感知（打字/语音说「看看我的屏幕」即带截图提问）</span>
+        </label>
+        <label class="row">
+          <span class="label">感知指令关键词</span>
+          <textarea id="intent-perceive-keywords" rows="4" spellcheck="false" placeholder="一行一个子串，命中即触发截图；含「别看/不要看」等否定词时不触发。清空保存则恢复默认"></textarea>
+        </label>
         <div class="row buttons">
           <button id="btn-save-scene" class="btn primary">保存配置</button>
           <span id="scene-save-msg" class="msg"></span>

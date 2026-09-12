@@ -7,7 +7,7 @@ use windows::core::Interface;
 use windows::Graphics::Capture::{Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
@@ -23,8 +23,10 @@ use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
 
 #[derive(serde::Serialize)]
@@ -59,17 +61,102 @@ fn process_name_of_pid(pid: u32) -> String {
     }
 }
 
+// ---------- 指令感知的 fallback 选窗（前台是桌宠自己/桌面壳时，取 Z 序下一个可用窗口） ----------
+
+struct FallbackPick {
+    own_pid: u32,
+    picked: Option<(HWND, u32)>,
+}
+
+/// EnumWindows 回调（Z 序自上而下）：取第一个"可见、非最小化、非工具窗、非 cloaked、
+/// 非自己进程、非桌面壳类"的顶层窗口；找到即停（第一个 = 除本体外最靠前的）。
+unsafe extern "system" fn enum_fallback_proc(
+    hwnd: HWND,
+    lparam: LPARAM,
+) -> windows::core::BOOL {
+    let ctx = &mut *(lparam.0 as *mut FallbackPick);
+    if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        return true.into();
+    }
+    let exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if exstyle & WS_EX_TOOLWINDOW.0 != 0 {
+        return true.into();
+    }
+    let mut cloaked: u32 = 0;
+    let _ = DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED,
+        &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+        std::mem::size_of::<u32>() as u32,
+    );
+    if cloaked != 0 {
+        return true.into();
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == 0 || pid == ctx.own_pid {
+        return true.into();
+    }
+    let mut cbuf = [0u16; 256];
+    let cn = GetClassNameW(hwnd, &mut cbuf);
+    let class = if cn > 0 {
+        String::from_utf16_lossy(&cbuf[..cn as usize])
+    } else {
+        String::new()
+    };
+    if matches!(
+        class.as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+    ) {
+        return true.into();
+    }
+    ctx.picked = Some((hwnd, pid));
+    false.into()
+}
+
 /// 抓取当前前台窗口画面。错误字符串是给 JS 侧分类用的语义标签。
-pub fn capture_foreground() -> Result<CaptureResult, String> {
+/// fallback_next：前台是桌宠自己（或桌面壳 explorer）时，改抓 Z 序下一个可用窗口；
+/// blocklist：目标进程命中名单直接报 `blocked:<进程名>`（抓前拦截，一帧不抓，不往下换窗）。
+pub fn capture_with_opts(
+    fallback_next: bool,
+    blocklist: &[String],
+) -> Result<CaptureResult, String> {
     unsafe {
-        let hwnd = GetForegroundWindow();
+        let mut hwnd = GetForegroundWindow();
         if hwnd.is_invalid() {
             return Err("no_foreground".into());
         }
+        let own_pid = std::process::id();
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == std::process::id() {
+        let mut process = process_name_of_pid(pid);
+        let proc_lower = process.to_lowercase();
+        let is_self = pid == own_pid;
+        let is_desktop_shell = proc_lower == "explorer.exe";
+        if is_self && !fallback_next {
             return Err("self_window".into());
+        }
+        if fallback_next && (is_self || is_desktop_shell) {
+            let mut ctx = FallbackPick {
+                own_pid,
+                picked: None,
+            };
+            let _ = EnumWindows(
+                Some(enum_fallback_proc),
+                LPARAM(&mut ctx as *mut FallbackPick as isize),
+            );
+            match ctx.picked {
+                Some((h, p)) => {
+                    hwnd = h;
+                    pid = p;
+                    process = process_name_of_pid(pid);
+                }
+                None => return Err("self_window".into()), // 除本体外没有可抓窗口
+            }
+        }
+        let proc_lower = process.to_lowercase();
+        if blocklist.iter().any(|b| b == &proc_lower) {
+            return Err(format!("blocked:{proc_lower}"));
         }
         if IsIconic(hwnd).as_bool() {
             return Err("minimized".into());
@@ -81,7 +168,6 @@ pub fn capture_foreground() -> Result<CaptureResult, String> {
         } else {
             String::new()
         };
-        let process = process_name_of_pid(pid);
 
         if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
             return Err("wgc_unsupported".into());

@@ -123,6 +123,8 @@ SCENE_CONFIG_KEYS = (
     "proactive_enabled",
     "scene_enabled",
     "scene_interval_min",
+    "intent_perceive_enabled",
+    "intent_perceive_keywords",
 )
 
 # 语音输入（壳端远程拉取，控制页编辑；独立模式无插件时壳端设置面板兜底）
@@ -139,6 +141,13 @@ DEFAULT_SCENE_BLOCKLIST = (
     "weixin.exe, wechat.exe, wechatappex.exe, wechatplayer.exe, "
     "qq.exe, tim.exe, wxwork.exe, dingtalk.exe, wemeetapp.exe, "
     "winword.exe, excel.exe, powerpnt.exe"
+)
+DEFAULT_INTENT_PERCEIVE_ENABLED = True
+# 指令感知关键词（一行一个，子串匹配，大小写/空白不敏感；壳端另有否定护栏）
+DEFAULT_INTENT_PERCEIVE_KEYWORDS = (
+    "看看屏幕\n看我的屏幕\n看看我在\n我在干嘛\n我在做什么\n我在干什么\n"
+    "看看桌面\n看看窗口\n当前窗口\n屏幕上\n看看这个\n"
+    "look at my screen\nwhat's on my screen\nwhat am i doing"
 )
 
 
@@ -322,6 +331,19 @@ class DesktopPetBridge(Star):
     def _parse_blocklist(raw: str) -> list[str]:
         return [s.strip().lower() for s in re.split(r"[,，\s]+", raw or "") if s.strip()]
 
+    def _intent_perceive_enabled(self) -> bool:
+        return bool(self.config.get("intent_perceive_enabled", DEFAULT_INTENT_PERCEIVE_ENABLED))
+
+    def _intent_perceive_keywords_str(self) -> str:
+        return str(
+            self.config.get("intent_perceive_keywords") or DEFAULT_INTENT_PERCEIVE_KEYWORDS
+        ).strip()
+
+    @staticmethod
+    def _parse_keywords(raw: str) -> list[str]:
+        # 一行一个子串（保留行内空格，如 "look at my screen"）；壳端匹配时再归一化
+        return [s.strip() for s in (raw or "").splitlines() if s.strip()]
+
     def _scene_payload(self) -> dict:
         return {
             "provider": self._scene_provider(),
@@ -329,6 +351,10 @@ class DesktopPetBridge(Star):
             "proactive_enabled": self._proactive_enabled(),
             "scene_enabled": self._scene_enabled(),
             "scene_interval_min": self._scene_interval_min(),
+            "intent_perceive_enabled": self._intent_perceive_enabled(),
+            "intent_perceive_keywords": self._parse_keywords(
+                self._intent_perceive_keywords_str()
+            ),
         }
 
     def _asr_payload(self) -> dict:
@@ -592,6 +618,8 @@ class DesktopPetBridge(Star):
                 "proactive_enabled": self._proactive_enabled(),
                 "scene_enabled": self._scene_enabled(),
                 "scene_interval_min": self._scene_interval_min(),
+                "intent_perceive_enabled": self._intent_perceive_enabled(),
+                "intent_perceive_keywords": self._intent_perceive_keywords_str(),
                 "providers": self._list_providers(),
             }
         payload = await request.json(default={})
@@ -625,6 +653,14 @@ class DesktopPetBridge(Star):
                 return error_response("invalid value for scene_interval_min", status_code=400)
             self.config["scene_interval_min"] = v
             updated["scene_interval_min"] = v
+        if "intent_perceive_enabled" in payload:
+            v = bool(payload["intent_perceive_enabled"])
+            self.config["intent_perceive_enabled"] = v
+            updated["intent_perceive_enabled"] = v
+        if "intent_perceive_keywords" in payload:
+            v = str(payload["intent_perceive_keywords"]).strip() or DEFAULT_INTENT_PERCEIVE_KEYWORDS
+            self.config["intent_perceive_keywords"] = v
+            updated["intent_perceive_keywords"] = v
         self._persist_config()
         return {"saved": True, "updated": updated}
 

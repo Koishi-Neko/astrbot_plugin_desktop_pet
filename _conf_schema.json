@@ -103,6 +103,20 @@
         "default": 30,
         "invisible": true
     },
+    "intent_perceive_enabled": {
+        "description": "指令触发桌面感知开关",
+        "hint": "开启后，主人打字或语音说出「看看我的屏幕」「我在干嘛」等指令时，桌宠会抓取前台窗口截图随消息一起发给视觉模型。与 scene_enabled 自动感知相互独立；共用禁止抓取名单。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+    },
+    "intent_perceive_keywords": {
+        "description": "指令感知关键词",
+        "hint": "一行一个子串，命中即触发截图感知；大小写/空白不敏感。壳端内置否定护栏（含「别看」「不要看」等不触发）。",
+        "type": "string",
+        "default": "看看屏幕\n看我的屏幕\n看看我在\n我在干嘛\n我在做什么\n我在干什么\n看看桌面\n看看窗口\n当前窗口\n屏幕上\n看看这个\nlook at my screen\nwhat's on my screen\nwhat am i doing",
+        "invisible": true
+    },
     "voice_input_enabled": {
         "description": "语音输入总开关",
         "hint": "开启后桌宠输入栏的麦克风按钮可用（本地 ASR 服务 127.0.0.1:15055）。",

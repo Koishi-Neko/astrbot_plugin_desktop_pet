@@ -114,6 +114,96 @@ describe('normalizeBaseUrl', () => {
   });
 });
 
+describe('matchPerceiveIntent（指令感知匹配器）', () => {
+  // matchPerceiveIntent 依赖模块级 const INTENT_NEGATIONS，一并注入同一 VM 上下文
+  function loadIntentMatcher() {
+    const ctx = vm.createContext({});
+    const negations = source.match(/^const INTENT_NEGATIONS = \[[\s\S]*?\];/m)[0];
+    const defaults = source.match(/^const INTENT_PERCEIVE_DEFAULT_KEYWORDS = \[[\s\S]*?\];/m)[0];
+    const fn = source.match(/^function matchPerceiveIntent\s*\([^)]*\)\s*\{[\s\S]*?^\}/m)[0];
+    vm.runInContext(
+      `${negations}\n${defaults}\n${fn}\n` +
+        'this.matchPerceiveIntent = matchPerceiveIntent;\n' +
+        'this.DEFAULT_KEYWORDS = INTENT_PERCEIVE_DEFAULT_KEYWORDS;',
+      ctx
+    );
+    return { match: ctx.matchPerceiveIntent, DEFAULT_KEYWORDS: ctx.DEFAULT_KEYWORDS };
+  }
+  const { match, DEFAULT_KEYWORDS } = loadIntentMatcher();
+
+  test('命中常见中文指令', () => {
+    assert.strictEqual(match('看看我的屏幕', DEFAULT_KEYWORDS), '看我的屏幕');
+    assert.strictEqual(match('快看看屏幕！', DEFAULT_KEYWORDS), '看看屏幕');
+    assert.strictEqual(match('我在干嘛呢', DEFAULT_KEYWORDS), '我在干嘛');
+    assert.strictEqual(match('你知道我在做什么吗', DEFAULT_KEYWORDS), '我在做什么');
+    assert.strictEqual(match('看看这个页面', DEFAULT_KEYWORDS), '看看这个');
+    assert.strictEqual(match('屏幕上有什么好玩的', DEFAULT_KEYWORDS), '屏幕上');
+  });
+
+  test('命中英文指令（大小写/空白不敏感）', () => {
+    assert.strictEqual(match('Look At My Screen!', DEFAULT_KEYWORDS), 'look at my screen');
+    assert.strictEqual(match('WHAT AM I DOING now', DEFAULT_KEYWORDS), 'what am i doing');
+  });
+
+  test('空白容忍（ASR 转写可能带多余空格）', () => {
+    assert.strictEqual(match('看 看 屏 幕', DEFAULT_KEYWORDS), '看看屏幕');
+    assert.strictEqual(match('look  at   my screen', DEFAULT_KEYWORDS), 'look at my screen');
+  });
+
+  test('否定护栏：含否定词一律不触发', () => {
+    assert.strictEqual(match('别看我的屏幕', DEFAULT_KEYWORDS), null);
+    assert.strictEqual(match('不要看屏幕', DEFAULT_KEYWORDS), null);
+    assert.strictEqual(match('不许看我在干嘛', DEFAULT_KEYWORDS), null);
+  });
+
+  test('无关文本/空输入不触发', () => {
+    assert.strictEqual(match('今天天气不错', DEFAULT_KEYWORDS), null);
+    assert.strictEqual(match('屏幕好亮', DEFAULT_KEYWORDS), null);
+    assert.strictEqual(match('', DEFAULT_KEYWORDS), null);
+    assert.strictEqual(match(null, DEFAULT_KEYWORDS), null);
+    assert.strictEqual(match(undefined, DEFAULT_KEYWORDS), null);
+  });
+
+  test('自定义关键词列表生效', () => {
+    assert.strictEqual(match('帮我截个图', ['截个图']), '截个图');
+    assert.strictEqual(match('帮我截个图', ['别的词']), null);
+    assert.strictEqual(match('看看屏幕', []), null); // 空列表不触发
+  });
+
+  test('默认关键词每条都能自洽命中', () => {
+    for (const kw of DEFAULT_KEYWORDS) {
+      assert.strictEqual(match(kw, DEFAULT_KEYWORDS) !== null, true, `默认关键词「${kw}」应能命中`);
+    }
+  });
+});
+
+describe('intentFailNote（截图失败解释附注）', () => {
+  const intentFailNote = extractFunction(source, 'intentFailNote');
+
+  test('名单拦截：点名进程 + 不可抓取', () => {
+    const note = intentFailNote(new Error('blocked:weixin.exe'));
+    assert.ok(note.includes('weixin.exe'));
+    assert.ok(note.includes('不可抓取'));
+  });
+
+  test('已知错误语义映射', () => {
+    assert.ok(intentFailNote(new Error('self_window')).includes('没有其他可抓取'));
+    assert.ok(intentFailNote(new Error('minimized')).includes('最小化'));
+    assert.ok(intentFailNote(new Error('black_frame')).includes('受保护'));
+    assert.ok(intentFailNote(new Error('no_foreground')).includes('没有前台窗口'));
+  });
+
+  test('未知错误走通用文案且截断', () => {
+    const note = intentFailNote(new Error('wgc_interop: something went wrong'));
+    assert.ok(note.includes('截图失败'));
+    assert.ok(note.includes('请向主人说明'));
+  });
+
+  test('字符串入参也能处理', () => {
+    assert.ok(intentFailNote('blocked:qq.exe').includes('qq.exe'));
+  });
+});
+
 describe('proactiveLog functions', () => {
   function createCtx() {
     const store = {};

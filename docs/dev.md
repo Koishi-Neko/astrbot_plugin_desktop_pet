@@ -63,7 +63,7 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 | GET  | `/api/v1/plugins/extensions/desktop_pet/pet/health` | 探活，返回插件、默认模型可用性、情绪列表、TTS/QQ 配音开关、会话 ID |
 | POST | `/api/v1/plugins/extensions/desktop_pet/pet/tts` | 日语 TTS 合成：`{"text":"..."}` → `{"audio":"<base64 wav>","format":"wav"}`，壳端按句调用 |
 | GET  | `/api/v1/plugins/extensions/desktop_pet/pet/personas` | 列出 AstrBot 人格（供桌宠选用参考） |
-| GET  | `/api/v1/plugins/extensions/desktop_pet/pet/scene_config` | 桌面感知配置下发：`{"provider":"...","blocklist":[...]}`，壳端 120s 缓存拉取 |
+| GET  | `/api/v1/plugins/extensions/desktop_pet/pet/scene_config` | 桌面感知配置下发：`{"provider":"...","blocklist":[...],"intent_perceive_enabled":true,"intent_perceive_keywords":[...]}`，壳端 120s 缓存拉取 |
 | POST | `/api/v1/plugins/extensions/desktop_pet/pet/status_report` | 壳端状态上报（60s 心跳 + 触发后防抖），插件内存暂存供控制页监控 |
 | *    | `/api/v1/plugins/extensions/astrbot_plugin_desktop_pet/page/*` | WebUI 控制页后端（status / sbv2_models / tts_config / master_config / persona_config / scene_config / tts_test） |
 
@@ -83,8 +83,9 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 - **用户模型上传/卸载**：设置面板路径上传或拖拽（Tauri 2 原生 `onDragDropEvent`）→ Rust `pet_model_upload`（文件夹/`.model3.json`/`.zip`；复制到 `%LOCALAPPDATA%\com.astrbotpet.shell\models\<key>\`，全部文件扁平化 ASCII 重命名并重写 model3.json 引用，校验 moc3 版本字节 1~5）→ 注册进 `MODELS` 自动切换。运行时经自定义协议 `petmodel://localhost/<key>/<file>`（Windows 下 `http://petmodel.localhost`，路径带真实 "/" 层级使相对引用可解析；asset protocol 全量百分号编码路径不可用，勿回退）。已上传模型启动时经 `pet_model_list` 扫描注册，`genericProfile`（动作组全用、无表情映射、无 coin_sway）；子菜单 `×` 卸载（`pet_model_delete` 删目录）。zip 解压需 zip crate `deflate` feature。
 - 待机系统：idle_sway 循环 + 随机调度器（25~60s 小动作/表情/视线游移）+ 视线跟随（3s 看门狗缓动回正）+ 长待机演出 `coin_sway`（智乃档案，25s 无对话保底，发言不退出、情绪走表情通道叠加）。
 - 主动对话：app.js 尾部模块，30s tick，规则 night_owl / welcome_back / sedentary 均带独立冷却；全局节流 45min（`lastChatAt`）；免打扰：全屏 / 输入框打开 / 对话中 / 空闲超时。
-- 桌面感知：Rust `capture_window`（WGC 进程级抓取，只含目标窗口；遮挡可抓；独占全屏/最小化/DRM 抓不到）→ `/api/v1/file` 上传 → 视觉模型识图；`scene_blocklist` 抓取前拦截。
-- 调试句柄：`__proactiveFire/__proactiveTick/__proactiveParams/__proactiveLog/__sceneShot/__sceneWatch`；lab 页暴露 `window.__model`/`__app`。
+- 桌面感知：Rust `capture_window`（WGC 进程级抓取，只含目标窗口；遮挡可抓；独占全屏/最小化/DRM 抓不到）→ `/api/v1/file` 上传 → 视觉模型识图；`scene_blocklist` 抓取前拦截。`capture_window` 可选参 `fallbackNext`（前台是桌宠自己/桌面壳 explorer 时沿 Z 序改抓下一个"可见·非最小化·非工具窗·非 cloaked·非桌面类名"的窗口）+ `blocklist`（目标进程命中即报 `blocked:<proc>`，抓前拦截不截图、不往下换窗）。
+- 指令感知（intent_perceive）：用户消息统一入口 `sendUserMessage`（Enter 与语音自动发送都走这里）→ `matchPerceiveIntent` 子串匹配（大小写/空白不敏感，`INTENT_NEGATIONS` 否定护栏）→ 命中即 `capture_window(fallbackNext, blocklist)` 截图随消息发送（AstrBot 走 `/file` 附件 + `provider` 请求级覆盖，独立模式 `imageB64` 内联）；失败拼 `intentFailNote` 附注让桌宠口头说明（blocked/self_window/minimized/black_frame 分文案），不静默。与 scene_watch 解耦（自动感知关闭时主人点名仍可用），共用 blocklist；配置键 `intent_perceive_enabled`/`intent_perceive_keywords`（插件下发，优先级同 scene 远程链）。
+- 调试句柄：`__proactiveFire/__proactiveTick/__proactiveParams/__proactiveLog/__sceneShot/__sceneWatch/__intentMatch`；lab 页暴露 `window.__model`/`__app`。
 
 ### Live2D 踩坑备忘
 

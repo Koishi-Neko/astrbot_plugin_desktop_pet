@@ -814,9 +814,17 @@ async fn asr_transcribe(url: String, wav_b64: String, initial_prompt: Option<Str
 }
 
 /// 桌面感知：抓取当前前台窗口画面（WGC 进程级），返回 JPEG base64 与窗口信息。
+/// fallbackNext=true 时前台是桌宠自己/桌面壳则改抓 Z 序下一个可用窗口（指令感知用）；
+/// blocklist 非空时目标进程命中名单抓前拦截，报 `blocked:<进程名>`。
 #[tauri::command]
-fn capture_window() -> Result<capture::CaptureResult, String> {
-    capture::capture_foreground()
+fn capture_window(
+    fallback_next: Option<bool>,
+    blocklist: Option<Vec<String>>,
+) -> Result<capture::CaptureResult, String> {
+    capture::capture_with_opts(
+        fallback_next.unwrap_or(false),
+        &blocklist.unwrap_or_default(),
+    )
 }
 
 // ---------- 用户模型上传/卸载（磁盘模型运行时经 asset protocol 加载） ----------

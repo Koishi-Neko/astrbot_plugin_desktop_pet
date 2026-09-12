@@ -1273,7 +1273,7 @@ async function transcribeAndFill(wavB64) {
       chatInput.classList.remove("mic-pending");
       if (!micCancelAutoSend && chatInput.value === text) {
         if (sending) return; // 回复进行中：只回填不自动发，用户回车再发
-        sendChat(text).catch(() => {});
+        sendUserMessage(text).catch(() => {});
       }
     }, ASR_AUTO_SEND_MS);
   } catch (e) {
@@ -1410,7 +1410,7 @@ chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && chatInput.value.trim()) {
     const text = chatInput.value.trim();
     chatInput.value = "";
-    sendChat(text);
+    sendUserMessage(text); // 统一入口：命中感知指令时带截图发送
   }
 });
 
@@ -1929,7 +1929,7 @@ function applyProactiveConfig() {
 // 主动对话/桌面感知生效参数：全部由插件侧统一下发（控制页配置），
 // 壳端 120s 缓存远程拉取；插件不可达时回退 config.local.json/内置默认。
 // 壳端设置面板只保留连接与本地偏好项。
-let sceneRemoteCfg = null; // {provider, blocklist[], proactive_enabled, scene_enabled, scene_interval_min, fetchedAt}
+let sceneRemoteCfg = null; // {provider, blocklist[], proactive_enabled, scene_enabled, scene_interval_min, intent_enabled, intent_keywords[], fetchedAt}
 const SCENE_REMOTE_TTL_MS = 120_000;
 
 async function fetchSceneConfig(force = false) {
@@ -1955,6 +1955,10 @@ async function fetchSceneConfig(force = false) {
         proactive_enabled: d.proactive_enabled !== false,
         scene_enabled: d.scene_enabled === true,
         scene_interval_min: Number(d.scene_interval_min) > 0 ? Number(d.scene_interval_min) : null,
+        intent_enabled: d.intent_perceive_enabled !== false, // 指令感知开关（默认开）
+        intent_keywords: Array.isArray(d.intent_perceive_keywords)
+          ? d.intent_perceive_keywords.map((s) => String(s)).filter((s) => s.trim())
+          : null,
         fetchedAt: Date.now(),
       };
     }
@@ -2265,6 +2269,114 @@ window.__proactiveFire = (ruleId) => {
 window.__proactiveLog = () => JSON.parse(localStorage.getItem("pet_proactive_log") || "[]");
 window.__proactiveParams = () => proactiveParams;
 window.__proactiveTick = proactiveTick;
+// ---------- 指令感知（intent_perceive） ----------
+// 主人打字或语音说"看看我的屏幕"→ 抓前台窗口截图随消息一起发（语音/打字一视同仁）。
+// 与 scene_watch 自动感知解耦：自动感知关了，主人点名仍应能看；但共用同一份禁止抓取名单。
+// 截图链路复用 scene_watch：fallbackNext 让"前台是桌宠自己"时改抓 Z 序下一个窗口；
+// blocklist 在 Rust 侧抓前拦截（命中报 blocked:<进程名>，一帧不抓、不往下换窗）。
+const INTENT_PERCEIVE_DEFAULT_KEYWORDS = [
+  "看看屏幕",
+  "看我的屏幕",
+  "看看我在",
+  "我在干嘛",
+  "我在做什么",
+  "我在干什么",
+  "看看桌面",
+  "看看窗口",
+  "当前窗口",
+  "屏幕上",
+  "看看这个",
+  "look at my screen",
+  "what's on my screen",
+  "what am i doing",
+];
+const INTENT_NEGATIONS = ["别看", "不要看", "别瞅", "不准看", "不许看"]; // 否定护栏：绝不触发
+
+// 生效参数：远程（sceneRemoteCfg，120s TTL）> config.local.json intent_perceive 节 > 内置默认
+function intentPerceiveEnabled() {
+  if (sceneRemoteCfg) return sceneRemoteCfg.intent_enabled;
+  const c = fileConfig && fileConfig.intent_perceive;
+  return !(c && c.enabled === false);
+}
+function intentPerceiveKeywords() {
+  if (sceneRemoteCfg && Array.isArray(sceneRemoteCfg.intent_keywords))
+    return sceneRemoteCfg.intent_keywords;
+  const c = fileConfig && fileConfig.intent_perceive;
+  if (c && Array.isArray(c.keywords) && c.keywords.length) return c.keywords.map(String);
+  return INTENT_PERCEIVE_DEFAULT_KEYWORDS;
+}
+
+// 归一化（大小写/空白不敏感）+ 否定护栏 + 逐条子串匹配；返回命中的关键词或 null
+function matchPerceiveIntent(text, keywords) {
+  const t = String(text || "").toLowerCase().replace(/\s+/g, "");
+  if (!t) return null;
+  for (const n of INTENT_NEGATIONS) if (t.includes(n)) return null;
+  for (const k of keywords || []) {
+    const kw = String(k).toLowerCase().replace(/\s+/g, "");
+    if (kw && t.includes(kw)) return String(k);
+  }
+  return null;
+}
+
+// 截图失败的解释附注：拼在消息尾部，让桌宠口头向主人说明（不静默、不假装看到了）
+function intentFailNote(err) {
+  const msg = String((err && err.message) || err || "");
+  if (msg.startsWith("blocked:")) {
+    const proc = msg.slice("blocked:".length);
+    return `\n（系统提示：前台窗口「${proc}」在禁止抓取名单中，本次没有截图，请明确告诉主人这个应用被设置为不可抓取。）`;
+  }
+  const reasons = {
+    self_window: "桌面上没有其他可抓取的窗口",
+    minimized: "前台窗口已最小化",
+    black_frame: "画面受保护或全黑（可能是 DRM 或独占全屏）",
+    no_foreground: "没有前台窗口",
+  };
+  const r = reasons[msg] || `截图失败（${msg.slice(0, 40)}）`;
+  return `\n（系统提示：${r}，本次没有截图，请向主人说明暂时看不到屏幕。）`;
+}
+
+// 用户消息统一入口（Enter 与语音自动发送都走这里）：意图命中则带截图发送
+async function sendUserMessage(text) {
+  if (!intentPerceiveEnabled() || sending) return sendChat(text);
+  const kw = matchPerceiveIntent(text, intentPerceiveKeywords());
+  if (!kw) return sendChat(text);
+  await fetchSceneConfig(); // TTL 守卫：拿最新名单/视觉模型配置（过期才发请求）
+  const p = sceneParams();
+  console.log("[intent] 指令感知命中:", kw);
+  proactiveLogFire("intent_perceive", text);
+  try {
+    const shot = await invoke()("capture_window", {
+      fallbackNext: true,
+      blocklist: p.blocklist,
+    });
+    const where = shot.window_title || shot.process;
+    console.log("[intent] 指令感知截图:", where);
+    if (petMode() === "standalone") {
+      // 独立模式：截图 base64 内联直传（带图时自动切 sceneModel）
+      return await sendChat(text, { imageB64: shot.jpeg_b64 });
+    }
+    const cfg = loadConfig();
+    const up = await invoke()("pet_upload_file", {
+      url: openApiRoot(cfg.baseUrl) + "/file",
+      apiKey: cfg.apiKey,
+      filename: "scene.jpg",
+      contentType: "image/jpeg",
+      dataB64: shot.jpeg_b64,
+    });
+    const upJson = JSON.parse(up);
+    const attachmentId = upJson.attachment_id || (upJson.data && upJson.data.attachment_id);
+    if (!attachmentId) throw new Error("上传响应无 attachment_id: " + up);
+    // provider 为请求级覆盖（scene_provider，空 = 跟随会话默认模型）
+    return await sendChat(text, { image: { attachmentId }, provider: p.provider });
+  } catch (e) {
+    console.warn("[intent] 指令感知截图失败:", e);
+    proactiveLogFire("intent_perceive(失败)", String((e && e.message) || e).slice(0, 50));
+    return sendChat(text + intentFailNote(e));
+  }
+}
+
+window.__intentMatch = (t) => matchPerceiveIntent(t, intentPerceiveKeywords()); // CDP 调试用：无副作用
+
 window.__sceneShot = () => invoke()("capture_window", {}); // CDP 调试用：抓一帧看效果
 window.__sceneState = () => ({ sceneLastKey, scenePending, lastSceneCaptureAt, lastSceneCaptureKey, lastSceneResult }); // CDP 调试用：看动态触发状态机
 window.__sceneWatch = async () => { // CDP 调试用：强制一次桌面感知（跳防抖跳频率闸门）

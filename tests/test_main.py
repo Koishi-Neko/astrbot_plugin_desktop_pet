@@ -89,6 +89,27 @@ def test_parse_blocklist_extra_whitespaces_and_empty_parts():
     assert DesktopPetBridge._parse_blocklist("a,, , b") == ["a", "b"]
 
 
+def test_parse_keywords_empty():
+    assert DesktopPetBridge._parse_keywords("") == []
+    assert DesktopPetBridge._parse_keywords(None) == []
+
+
+def test_parse_keywords_one_per_line():
+    assert DesktopPetBridge._parse_keywords("看看屏幕\n我在干嘛\n") == ["看看屏幕", "我在干嘛"]
+
+
+def test_parse_keywords_preserves_inner_spaces():
+    # 行内空格必须保留（英文短语）；首尾空白裁剪；空行丢弃
+    assert DesktopPetBridge._parse_keywords("look at my screen\n  what am i doing  \n\n") == [
+        "look at my screen",
+        "what am i doing",
+    ]
+
+
+def test_parse_keywords_crlf():
+    assert DesktopPetBridge._parse_keywords("看看屏幕\r\n我在干嘛") == ["看看屏幕", "我在干嘛"]
+
+
 def test_strip_think_parts_ignores_non_dicts():
     history = ["not a dict", 123, None]
     original = list(history)
