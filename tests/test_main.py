@@ -1,4 +1,3 @@
-import pytest
 from main import _strip_image_parts, _strip_think_parts, DesktopPetBridge
 
 def test_strip_image_parts_ignores_non_dicts():
@@ -151,9 +150,7 @@ def test_strip_think_parts_mixed():
     ]
 
 import sqlite3
-import pytest
 from unittest.mock import patch, MagicMock
-from pathlib import Path
 from datetime import datetime
 
 def test_get_provider_stats_no_file(tmp_path):
@@ -265,3 +262,101 @@ def test_get_provider_stats_missing_optional_column(tmp_path):
         assert stats["today"]["cached"] == 0
         assert stats["today"]["output"] == 20
         assert stats["today"]["ttft_avg"] == 0.0
+
+import types
+
+def test_rewrite_pet_identity_happy_path():
+    bridge = DesktopPetBridge(MagicMock(), {"master_name": "Jules", "master_qq": "12345"})
+    req = types.SimpleNamespace()
+
+    req.extra_user_content_parts = [
+        types.SimpleNamespace(text="User ID: desktop_pet, Nickname: desktop_pet"),
+        types.SimpleNamespace(text="desktop_pet is cool"),
+        types.SimpleNamespace(text=None)
+    ]
+    req.prompt = "Hello User ID: desktop_pet, Nickname: desktop_pet"
+    req.system_prompt = "System: User ID: desktop_pet, Nickname: desktop_pet"
+    req.contexts = [
+        {"content": "Context: User ID: desktop_pet, Nickname: desktop_pet"},
+        {"content": [{"text": "Part: User ID: desktop_pet, Nickname: desktop_pet"}, {"text": "Just desktop_pet"}]}
+    ]
+
+    bridge._rewrite_pet_identity(req)
+
+    assert req.extra_user_content_parts[0].text == "User ID: 12345, Nickname: Jules"
+    assert req.extra_user_content_parts[1].text == "Jules is cool"
+    assert req.extra_user_content_parts[2].text is None
+
+    assert req.prompt == "Hello User ID: 12345, Nickname: Jules"
+    assert req.system_prompt == "System: User ID: 12345, Nickname: Jules"
+    assert req.contexts[0]["content"] == "Context: User ID: 12345, Nickname: Jules"
+    assert req.contexts[1]["content"][0]["text"] == "Part: User ID: 12345, Nickname: Jules"
+    assert req.contexts[1]["content"][1]["text"] == "Just Jules"
+
+def test_rewrite_pet_identity_contexts():
+    bridge = DesktopPetBridge(MagicMock(), {"master_name": "Jules", "master_qq": "12345"})
+    req = types.SimpleNamespace()
+
+    # Non-dict segments, non-str values
+    req.contexts = [
+        {"content": [{"not_text": "User ID: desktop_pet, Nickname: desktop_pet"}]},
+        {"content": "User ID: desktop_pet, Nickname: desktop_pet"},
+        "not a dict",
+        {"content": [{"text": 123}]}, # non-str text
+        {"content": 123},
+        {"other": "User ID: desktop_pet, Nickname: desktop_pet"}
+    ]
+
+    bridge._rewrite_pet_identity(req)
+
+    assert req.contexts[0]["content"][0]["not_text"] == "User ID: desktop_pet, Nickname: desktop_pet"
+    assert req.contexts[1]["content"] == "User ID: 12345, Nickname: Jules"
+    assert req.contexts[2] == "not a dict"
+    assert req.contexts[3]["content"][0]["text"] == 123
+    assert req.contexts[4]["content"] == 123
+    assert req.contexts[5]["other"] == "User ID: desktop_pet, Nickname: desktop_pet"
+
+def test_rewrite_pet_identity_no_false_positives():
+    bridge = DesktopPetBridge(MagicMock(), {"master_name": "Jules", "master_qq": "12345"})
+    req = types.SimpleNamespace()
+
+    # Test identical return string instances
+    original_str = "No session id here"
+    req.extra_user_content_parts = [types.SimpleNamespace(text=original_str)]
+    req.prompt = None
+    req.system_prompt = 123
+    # contexts is missing entirely
+
+    bridge._rewrite_pet_identity(req)
+
+    assert req.extra_user_content_parts[0].text is original_str
+    assert req.prompt is None
+    assert req.system_prompt == 123
+
+def test_rewrite_pet_identity_fallbacks():
+    # Empty config should use default fallbacks
+    bridge = DesktopPetBridge(MagicMock(), {})
+    req = types.SimpleNamespace()
+
+    req.prompt = "User ID: desktop_pet, Nickname: desktop_pet"
+    bridge._rewrite_pet_identity(req)
+    assert req.prompt == "User ID: master, Nickname: 主人"
+
+    # Custom session ID
+    bridge = DesktopPetBridge(MagicMock(), {"master_name": "Jules", "master_qq": "12345", "pet_session_id": "custom_pet"})
+    req = types.SimpleNamespace()
+
+    req.prompt = "User ID: custom_pet, Nickname: custom_pet"
+    bridge._rewrite_pet_identity(req)
+    assert req.prompt == "User ID: 12345, Nickname: Jules"
+
+def test_rewrite_pet_identity_pin_intended_behavior():
+    # Document that bare substring hits of the session ID are replaced by the master name
+    bridge = DesktopPetBridge(MagicMock(), {"master_name": "Jules", "master_qq": "12345"})
+    req = types.SimpleNamespace()
+
+    req.prompt = "I am talking to desktop_pet, who is my friend desktop_pet."
+    bridge._rewrite_pet_identity(req)
+
+    # Bare occurrences are replaced by aggressive string replacement
+    assert req.prompt == "I am talking to Jules, who is my friend Jules."
