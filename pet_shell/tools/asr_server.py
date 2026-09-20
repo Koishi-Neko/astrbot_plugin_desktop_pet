@@ -21,7 +21,6 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
-import numpy as np
 import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, Request
