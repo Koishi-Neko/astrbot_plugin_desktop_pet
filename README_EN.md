@@ -1,6 +1,6 @@
 # astrbot_plugin_desktop_pet
 
-**Turn AstrBot into a Windows desktop Live2D pet** — or skip AstrBot entirely: standalone mode connects straight to any OpenAI-compatible model, up and running in 5 minutes.
+**Turn AstrBot into your personal Windows Live2D desktop pet** — or **just ditch AstrBot entirely**: hook it up directly to any OpenAI-compatible LLM via Standalone Mode and get a living pet on your screen in 5 minutes.
 
 [中文](README.md) | [English](README_EN.md)
 
@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/Koishi-Neko/astrbot_plugin_desktop_pet.svg)](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/Koishi-Neko/astrbot_plugin_desktop_pet/release.yml?label=CI)](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/actions)
 
-<!-- Demo screenshot: docs/assets/pet-demo.png (model + chat bubble + input bar) -->
+<!-- Demo screenshot: docs/assets/pet-demo.png (model + bubble + input box) -->
 ![Demo](docs/assets/pet-demo.png)
 
 ## Table of Contents
@@ -19,83 +19,85 @@
 - [Standalone Mode](#standalone-mode)
 - [Advanced](#advanced)
 - [Controls](#controls)
-- [Build from Source](#build-from-source)
+- [Build from source](#build-from-source)
 - [FAQ](#faq)
 - [Development Docs](#development-docs)
 - [License](#license)
 
 ## Features
 
-A Live2D companion that lives on your Windows desktop, in two flavors:
+A Live2D companion living right on your Windows desktop. We give you two ways to run it:
 
-| | AstrBot mode (full) | Standalone mode (lightweight) |
+| | AstrBot Mode (The Full Experience) | Standalone Mode (Lightweight & Lazy) |
 | --- | --- | --- |
-| Brain | AstrBot (webchat pipeline) | Any OpenAI-compatible model (cloud / local Ollama) |
-| Persona / memory | Per-session persona + history; optional memory plugin (LivingMemory) | Persona text in settings; in-session memory |
-| Japanese voice | Style-Bert-VITS2, sentence-by-sentence with mouth sync | Same (TTS URL configurable) |
-| Deployment | AstrBot required (Docker / native) | None — 5 minutes to first chat |
+| The Brain | AstrBot (via webchat pipeline) | Any OpenAI-compatible LLM (Cloud API / local Ollama) |
+| Persona & History | Session-level persona + platform history. Want long-term memory? Just install LivingMemory. | Toss a persona prompt in the settings panel. Remembers the current session. |
+| Japanese Voice | SBV2 synthesis, sentence-by-sentence playback + lip sync | Same deal (just give it a TTS URL) |
+| Setup Required | Get AstrBot running (Docker / native) | Literally nothing, up and running in 5 minutes |
 
-- **Live2D desktop companion**: transparent, borderless, always-on-top window with emotion expressions, poke reactions, eye tracking, random idle motions and a long-idle performance
-- **Multiple models, hot-swapped**: built-in Momose Hiyori plus Chino / Chino-Q (local); switch instantly from the right-click menu (remembered). Or **drag-and-drop any Cubism 3~5 model** onto the pet to use it (folder / `.model3.json` / `.zip`)
-- **Typewriter bubble + input bar**: replies carry 【emotion】 tags that switch expressions; Chinese bubble plus optional Japanese sentence-by-sentence voice
-- **Voice input**: mic button in the input bar — click to record, local ASR (whisper @ Intel NPU) transcribes and auto-sends; switch and server URL are configured on the control page
-- **Proactive chatter**: late-night reminders, welcome-back greetings, sedentary alerts; optional scene awareness comments on what's on your screen (with a capture blocklist — WeChat/QQ/DingTalk/Office are skipped by default)
-- **WebUI control page**: in AstrBot mode, all server-side settings live in one graphical page, applied on save
+- **Live2D Desktop Mascot**: A borderless, transparent, always-on-top little window. It changes expressions, reacts when you poke it, follows your cursor, does random idle animations, and even has special long-idle performances.
+- **Hot-swap Multiple Models**: Ships out-of-the-box with Momose Hiyori + Chino/Chino Chibi (local). Swap instantly from the right-click menu and it'll remember your choice. Got your own Cubism 3~5 models? Just **drag and drop** to upload them (supports folders, `.model3.json`, or `.zip`).
+- **Typewriter Bubble + Input Box**: If the reply has an [emotion] tag, the expression automatically changes. Chinese text bubbles, plus optional Japanese sentence-by-sentence dubbing if you're into that.
+- **Voice Input**: Hit the mic icon on the input bar, speak → local ASR (whisper @ Intel NPU) transcribes it → auto-sends. Save your keystrokes. Switches and server addresses are configurable in the control page.
+- **Proactive Chat**: Nags you to sleep late at night, welcomes you back if you step away, and reminds you to stretch if you've been sitting too long. It also subtly peeks at your desktop and comments on interesting stuff (don't worry, there's a blocklist—WeChat, QQ, and Office are ignored by default).
+- **WebUI Control Page**: If you're running AstrBot mode, all the server-side configs have a slick GUI. Save and it takes effect instantly.
 
 ## Quick Start
+<a id="quick-start"></a>
 
-### Route A: 5-minute taste (no AstrBot)
+### Route A: The 5-Minute Speedrun (No AstrBot)
 
-1. Grab the Windows portable build from [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) (zip — unzip and run, or the NSIS installer).
-   > SmartScreen may warn "Windows protected your PC" because the exe is not code-signed; click "Run anyway".
-2. Right-click the pet → **Settings → Mode → Standalone**, and fill in three things:
-   - Model URL (OpenAI-compatible, e.g. `https://api.deepseek.com/v1`; local [Ollama](https://ollama.com) → `http://localhost:11434/v1`)
-   - Model API Key (any non-empty value works for local Ollama)
-   - Model name (e.g. `deepseek-chat`)
-3. Hit "Test connection" — you'll see the model's reply. Double-click the pet to open the input bar and chat.
+1. Head to [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) and grab the Windows portable version (unzip and run, or use the NSIS installer).
+   > If Windows SmartScreen pops up complaining "Windows protected your PC" on first run: don't panic, it's just because I didn't buy a code signing cert for the exe. Click "Run anyway".
+2. Right-click the pet → **Settings → Operating Mode → Standalone Mode**, and fill in these three:
+   - Model API URL (Anything OpenAI-compatible, like `https://api.deepseek.com/v1`; if running local [Ollama](https://ollama.com), use `http://localhost:11434/v1`)
+   - Model API Key (If it's local Ollama, just smash your keyboard to enter a dummy key)
+   - Chat Model Name (e.g., `deepseek-chat`)
+3. Hit "Test connection". If the model talks back, you're golden. Double-click the pet to start chatting.
 
-Japanese voice (optional): requires a local [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) deployment — see the [Standalone Mode](#standalone-mode) section.
+Japanese Voice (Optional): Want it to speak? You'll need to run [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) locally. See the notes under [Standalone Mode](#standalone-mode).
 
-### Route B: Full AstrBot experience (persona / memory / QQ)
+### Route B: The AstrBot Ultimate Form (Persona / Memory / QQ Integration)
 
-Prerequisite: a deployed AstrBot v4 with access to its WebUI (default `http://localhost:6185`). See the [AstrBot docs](https://docs.astrbot.app/).
+Prerequisite: You already have AstrBot v4 running and can access its WebUI (default is `http://localhost:6185`). Need help? Check the [official AstrBot docs](https://docs.astrbot.app/).
 
-1. **Install the plugin**: WebUI → Plugins → Install → paste this repo URL: `https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet`.
-   > The webchat platform used by the plugin is built into AstrBot; nothing to add under "Platforms".
-2. **Create an API Key**: WebUI → Settings → API Key → New, with **plugin, chat and file** scopes. Copy and save it.
-3. **Get the pet shell**: download the Windows build from [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) (NSIS installer, or the portable zip).
-4. **First-run configuration**: right-click the pet → Settings, enter the AstrBot address (`http://localhost:6185` is enough; the path is auto-completed) and your API Key, then hit "Test connection" — plugin / chat / file all green means done. Double-click to start chatting.
-5. **(Optional) Pick a persona**: WebUI → Plugins → astrbot_plugin_desktop_pet → Control Page → Pet Persona — pick one from the dropdown and save (otherwise the pet follows AstrBot's default persona). The conversation only exists after the pet has sent at least one message, so chat first, then set it.
+1. **Install the plugin**: WebUI → Plugins → Install Plugin → Paste this repo's URL: `https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet`.
+   > Note: The plugin uses AstrBot's built-in webchat platform. You do NOT need to configure anything in the "Platforms" tab.
+2. **Generate an API Key**: WebUI → Settings → API Key → New. Check all three scopes: **plugin, chat, file**, then copy and save it.
+3. **Get the Pet Shell**: Download the Windows version from [Releases](https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet/releases) (NSIS installer or portable zip).
+4. **First-time Setup**: Right-click the pet → Settings. Plug in your AstrBot address (just `http://localhost:6185` is fine, it auto-completes the path) and paste your API Key. Hit "Test connection" — once plugin / chat / file all light up green, you're set. Double-click to chat.
+5. **(Optional) Pick a Persona**: WebUI → Plugins → astrbot_plugin_desktop_pet → Control Page → Pet Persona. Pick one from the dropdown and save (leaves it blank to inherit AstrBot's default). Heads up: if the pet hasn't spoken yet, the session doesn't exist, so send it one message first before setting this.
 
-Advanced server-side settings (TTS, proactive chat, scene awareness, master identity, QQ dubbing) live in **WebUI → Plugins → astrbot_plugin_desktop_pet → Control Page**, applied on save.
+All the fancy server-side tweaks (TTS, proactive chat, scene awareness, master identity, QQ voice) live in **WebUI → Plugins → astrbot_plugin_desktop_pet → Control Page**. Save it and it works right away.
 
 ## Standalone Mode
+<a id="standalone-mode"></a>
 
-No AstrBot? No problem: **Settings → Mode → Standalone** makes the pet talk to any OpenAI-compatible API directly (DeepSeek, Kimi, or local Ollama). Chatting, emotion expressions, Japanese voice, proactive chat and scene awareness all work — the only difference is **no long-term memory** (that's a LivingMemory/AstrBot-plugin feature; you keep in-session history).
+Too lazy to deploy AstrBot? The pet can fly solo: **Settings Panel → Operating Mode → Standalone Mode**. It bypasses AstrBot entirely and hooks directly into any OpenAI-compatible API (like DeepSeek / Kimi in the cloud, or a local Ollama). Chatting, expression changes, Japanese dubbing, proactive chat, and scene awareness all work perfectly. The only trade-off? **It has gold-fish memory** (no long-term memory like the LivingMemory plugin, it only remembers the current session).
 
-| Capability | AstrBot mode | Standalone mode |
+| Capability | AstrBot Mode | Standalone Mode |
 | --- | --- | --- |
-| Chat / emotion tags / expression switching | ✅ | ✅ |
-| Japanese voice (needs local SBV2) | ✅ | ✅ (TTS URL configurable) |
-| Voice input (needs local ASR service) | ✅ (switch/URL on control page) | ✅ (default 15055, `config.local.json` overridable) |
-| Proactive chat / scene awareness | ✅ | ✅ (screenshots sent inline; vision model = chat model or separate) |
-| Conversation persona | WebUI control page | Settings "persona" text (built-in default if empty) |
-| Long-term memory (LivingMemory) | ✅ (optional plugin) | ❌ (not in V1) |
-| Configuration entry | WebUI control page | Settings panel / `config.local.json` |
-| Status monitoring page | ✅ | ❌ |
+| Chat / Emotion Tags / Expressions | ✅ | ✅ |
+| Japanese Dubbing (Requires local SBV2) | ✅ | ✅ (Just drop in the TTS URL) |
+| Voice Input (Requires local ASR service) | ✅ (Configure switch/URL in Control Page) | ✅ (Defaults to 15055, tweakable in config.local.json) |
+| Proactive Chat / Scene Awareness | ✅ | ✅ (Screenshots sent inline; vision model = chat model or manually specified) |
+| Session Persona | WebUI Control Page | Direct text in Settings Panel "Persona" (leave blank for built-in default) |
+| Long-term Memory (LivingMemory) | ✅ (via optional plugin) | ❌ (Not in V1, sorry) |
+| Where's the config? | WebUI Control Page | Settings Panel / `config.local.json` |
+| Status Dashboard | ✅ | ❌ |
 
-Configuration (settings panel "Standalone" section, or the `standalone` block of `config.local.json`):
+To configure it, head to the "Standalone Mode" section in the settings panel, or manually edit the `standalone` block in `config.local.json`:
 
 ```json
 {
   "mode": "standalone",
   "standalone": {
     "llm_base_url": "https://api.deepseek.com/v1",
-    "llm_api_key": "your model API Key",
+    "llm_api_key": "Your Model API Key",
     "llm_model": "deepseek-chat",
-    "persona": "optional, overrides the built-in default persona",
+    "persona": "Optional, overrides the built-in default persona",
     "tts_url": "http://localhost:5000",
-    "scene_model": "optional vision model for scene awareness; empty = chat model"
+    "scene_model": "Optional, vision model for scene awareness; leave blank to use the chat model"
   },
   "asr": {
     "url": "http://127.0.0.1:15055"
@@ -103,98 +105,101 @@ Configuration (settings panel "Standalone" section, or the `standalone` block of
 }
 ```
 
-> Switch back to AstrBot mode anytime from the settings panel — the two modes are independent and switching is instant.
+> Wanna go back to AstrBot mode? Just flip the dropdown back in the settings panel. The two modes operate independently; you can switch whenever.
 
-**Japanese voice in standalone mode**: requires a local Style-Bert-VITS2 (SBV2) deployment. On this WSL setup SBV2 listens on `127.0.0.1:5000`; thanks to WSL2 localhost forwarding, Windows reaches it directly at `http://localhost:5000` (the old socat loopback bridge was retired with the 2026-08-03 de-containerization). Leaving the TTS URL empty silently degrades to text-only bubbles.
+**About Standalone Japanese Dubbing**: You need to spin up a local Style-Bert-VITS2 (SBV2) instance. If your local (WSL-deployed) SBV2 is listening on `127.0.0.1:5000`, WSL2 forwards localhost natively—just type `http://localhost:5000` in Windows and it'll synthesize flawlessly (since we ripped out the containerized backend on 2026-08-03, network bridging is no longer a headache). Leave the TTS URL blank, and it silently degrades to a quiet text bubble.
 
-## Advanced
+## Advanced Playbook
+<a id="advanced"></a>
 
-<!-- Control page screenshot: docs/assets/control-page.png (control page + pet) -->
-![WebUI control page and the pet](docs/assets/control-page.png)
+<!-- 控制页截图：docs/assets/control-page.png（控制页 + 桌宠同框） -->
+![WebUI Control Page and Pet](docs/assets/control-page.png)
 
-### TTS Japanese dubbing (optional)
+### TTS Japanese Voice (Optional, but highly recommended)
 
-Voice replies require your own [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) deployment and a voice model:
+To get Japanese audio alongside the text replies, you gotta deploy [Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2) yourself and grab a voice model:
 
-1. Deploy SBV2 and note its address (typically `http://172.18.0.1:5000` when AstrBot runs in Docker and SBV2 on the WSL host).
-2. In the plugin control page "TTS" card, fill in the address, pick model/speaker/style from the dropdowns, enable and save.
-3. Enable "Voice (Japanese dubbing)" in the pet shell settings panel.
+1. Spin up SBV2 and note the URL (usually `http://172.18.0.1:5000` if AstrBot is in Docker and SBV2 is on your WSL host).
+2. In the plugin control page under the "TTS" card, paste the URL, pick your model/speaker/style from the dropdowns, flip the switch, and save.
+3. Open the pet shell settings panel and toggle on "Voice (Japanese dubbing)".
 
-Replies then become "Chinese bubble + Japanese sentence-by-sentence voice + mouth sync". Enabling "QQ Japanese dubbing" in the control page also attaches a voice message to the bot's QQ replies (falls back to plain text when SBV2 is offline).
+Boom, replies are now "Chinese bubble + sentence-by-sentence Japanese voice + lip sync". If you turn on "QQ Japanese dubbing" in the control page, the bot will also shoot a voice message into QQ groups/DMs when it replies (if SBV2 crashes, it gracefully degrades to plain text).
 
-> `2.7.0-JP-Extra` models only support Japanese; install a standard trilingual model if you need Chinese voice.
+> Heads up: `2.7.0-JP-Extra` models only speak Japanese. If you want Chinese voice, find yourself a standard trilingual model.
 
-### Voice input (optional, local ASR)
+### Voice Input (Optional, Local ASR)
 
-Open the input bar and hit the round mic button on the left to start recording (red breathing animation); tap again or pause for 1.2 s of silence to stop. The transcription is filled into the input bar and auto-sent after 0.5 s (click the input / press a key to cancel). Gaze-following and idle motions pause while recording.
+Pop open the input bar, smack the round mic button on the left to start recording (it breathes red), then click again or just stay quiet for 1.2 seconds to stop. The transcribed text jumps into the input box and auto-sends half a second later (click the box or press a key if you need to bail). Gaze-following and idle animations take a break while you're recording.
 
-- **Engine**: local whisper (OpenVINO, Intel NPU by default). Recognized text goes through the full chat pipeline (persona / memory / emotion / Japanese dubbing) unchanged.
-- **Service**: a Windows-side process (`tools/asr_server.py`, FastAPI at `http://127.0.0.1:15055`) requiring Python 3.12 + `openvino-genai` and a whisper model (`whisper-large-v3-turbo-fp16-ov`, OpenVINO official export). First NPU compile takes ~4 minutes; the mic button stays grey and recovers automatically.
-- **Switch & URL**: in AstrBot mode, configure them in the control page "Voice input" card (the shell pulls within ~2 minutes); in standalone mode the default is `http://127.0.0.1:15055`, overridable via the `asr` block of `config.local.json`.
-- **Hotwords**: an optional `initial_prompt` in the settings panel steers recognition of proper nouns; if the NPU static-shape pipeline rejects it, the server retries without it automatically — voice input never breaks.
-- **Stopped by default**: the ASR service is not auto-started; run `pet_shell/tools/start_asr.ps1` (or double-click `start_asr.vbs`, idempotent; logs in `asr-npu\asr.log`) when needed. `stop_all.ps1` stops it too.
-- Recognition is locked to Chinese (English speech still transcribes correctly); audio never leaves your machine.
+- **Under the Hood**: Local whisper (OpenVINO, running on your Intel NPU by default). The recognized text goes through the exact same chat pipeline as typing—persona, memory, emotions, Japanese dubbing, all intact.
+- **The Service**: It's a Windows-side process (`tools/asr_server.py`, a FastAPI server at `http://127.0.0.1:15055`). You'll need Python 3.12 + `openvino-genai` and a whisper model (`whisper-large-v3-turbo-fp16-ov`, the official OpenVINO export). The first time it boots, the NPU compile takes about 4 minutes; the mic button will stay greyed out and automatically come alive when it's ready.
+- **Toggle & Config**: In AstrBot mode, set the switch and URL in the control page "Voice input" card (the shell pulls the update in ~2 mins). In standalone mode, it defaults to `http://127.0.0.1:15055`, which you can override in the `asr` block of `config.local.json`.
+- **Hotwords / Accents**: You can chuck an `initial_prompt` into the settings panel to help it catch weird proper nouns. If the NPU static-shape pipeline chokes on it, the server smartly retries without the prompt, so your voice input never straight-up breaks.
+- **Manual Start**: To save your boot times, the ASR service does NOT auto-start. When you want to use it, run `pet_shell/tools/start_asr.ps1` (or just double-click `start_asr.vbs`, it's idempotent; check `asr-npu\asr.log` for logs). Running `stop_all.ps1` kills it.
+- Recognition is strictly locked to Chinese for now (though if you speak English, it surprisingly transcribes it fine anyway). Privacy check: audio is processed entirely on your machine, nothing gets uploaded.
 
-### Proactive chat & scene awareness
+### Proactive Chat & Desktop Snooping (Scene Awareness)
 
-Configured in the plugin control page (in standalone mode: the `proactive` block of `config.local.json`); the shell pulls changes within ~2 minutes:
+Configure these in the plugin control page (or the `proactive` block of `config.local.json` if in standalone mode). Changes sync to the shell in about 2 minutes:
 
-- **Proactive chat**: late-night reminder (active past 23:00–02:00), welcome-back (after 30+ min away), sedentary alert (2h continuous activity). Global 45-minute throttle; never disturbs while fullscreen, typing or away.
-- **Scene awareness**: periodically captures the **foreground window** and asks a vision model to comment on interesting content (game progress, funny pages); stays silent when there's nothing to say. **Screenshots are sent to your LLM provider.** The vision model can be chosen from a datalist hint on the control page, or left empty to use the chat model. Processes on the blocklist (WeChat/QQ/DingTalk/Office… by default) are never captured. Exclusive-fullscreen games can't be captured (borderless windowed works).
-- **Intent perception (on-demand look)**: type or say "看看我的屏幕" / "what am I doing" and the pet captures the foreground window and attaches the screenshot to that very message. Because the pet window itself has focus while you type or talk, it actually captures the topmost window below itself. Works independently of periodic scene awareness (you can call it even when auto-awareness is off) and shares the same blocklist — a blocklisted foreground app is never captured; the pet verbally says it's not allowed to look. Keywords are editable on the control page (one substring per line; negations like "别看"/"don't look" never trigger), and capture failures (exclusive fullscreen / DRM / minimized) are honestly reported. Voice commands need the local ASR service; typed commands always work.
+- **Proactive Chat**: Late-night scolding (active between 23:00–02:00), welcome-back greetings (away for 30+ mins), and sedentary warnings (2h of continuous activity). It has a global 45-minute throttle, and if you're in a fullscreen game, typing, or AFK, it knows better than to bother you.
+- **Scene Awareness**: Every so often, it grabs a screenshot of your **topmost foreground window** and hands it to a vision model. If it sees something cool (like your game progress or a funny meme), it strikes up a conversation. If there's nothing interesting, it keeps quiet. **Note: These screenshots are sent to your LLM provider.** You can pick the vision model from a dropdown in the control page, or leave it blank to just use the chat model. There's a blocklist (WeChat, QQ, DingTalk, Office, etc., by default)—if a blocked app is in focus, it skips the screenshot. Also, exclusive fullscreen games can't be captured; play in borderless windowed mode if you want it to watch.
+- **Intent Perception (On-demand Look)**: Type or tell the pet "看看我的屏幕" (Look at my screen) or "what am I doing", and it instantly snaps the foreground window and attaches it to your message. Since the pet itself has focus when you ask, it's smart enough to grab the topmost window *beneath* itself. This is completely separate from the automatic snooping—you can use this even if auto-awareness is off. It respects the same blocklist; if you try to make it look at a blocked app, it'll refuse and verbally tell you it's not allowed. You can tweak the trigger keywords in the control page (one per line; negations like "don't look" won't trigger it). If it fails to capture (exclusive fullscreen, DRM, minimized), it'll tell you honestly. Voice commands require the ASR service; typed commands work out of the box.
 
-### Custom Live2D models
+### Swapping in Your Custom Live2D Waifu/Husbando
 
-Drop any Cubism 3/4 model into `pet_shell/src/assets/live2d/chino/` with the entry file named `chino.model3.json` (rebuild required) to replace the default model. **Model file names and references inside model3.json must be ASCII-only.** Map emotions to your model's expression names in `EMOTION_EXPRESSIONS` in `pet_shell/src/app.js`.
+Got a Cubism 3 or 4 model? Toss it into `pet_shell/src/assets/live2d/chino/` and rename the entry file to `chino.model3.json` (you'll need to rebuild for this to take effect). **Crucial: The model filenames and internal references in model3.json MUST be ASCII-only.** To get the emotion tags mapping correctly, tweak `EMOTION_EXPRESSIONS` in `pet_shell/src/app.js` to match your model's actual expression names.
 
-Multiple models can be hot-swapped: add one entry each to the `MODELS` registry and the `MODEL_PROFILES` capability map in `app.js` (assets under `assets/live2d/<key>/`), and the right-click "Switch model" submenu picks it up immediately — switching is instant and remembered.
+Want to keep a harem and hot-swap them? Add an entry to the `MODELS` registry and the `MODEL_PROFILES` capability map in `app.js` (put the assets under `assets/live2d/<key>/`). It'll instantly show up in the right-click "Switch model" menu, and it remembers your pick.
 
-You can also **upload models directly** (no code changes): drop a model folder or zip onto the pet, or fill in a path under "Upload Live2D model" in settings — folders / `.model3.json` / `.zip` are supported (Cubism 3~5, moc3). Uploaded models are switched to immediately, remembered across restarts, and can be uninstalled via the `×` button in the "Switch model" submenu. They live in `%LOCALAPPDATA%\com.astrbotpet.shell\models\` and are served at runtime through the shell's built-in petmodel protocol.
+Too lazy to edit code? You can **upload models directly**: Just drag a model folder or a zip file right onto the pet, or punch the path into "Upload Live2D model" in the settings. Folders, `.model3.json`, and `.zip` (Cubism 3~5 moc3) are all supported. It switches immediately, remembers the new model across reboots, and you can uninstall it via the `×` button in the "Switch model" submenu. Uploaded models live in `%LOCALAPPDATA%\com.astrbotpet.shell\models\` and load via the shell's custom `petmodel` protocol.
 
-The bundled default model **Momose Hiyori** is Live2D's official free sample (license: see `ReadMe.txt` in the model folder and the [official license page](https://www.live2d.com/zh-CHS/download/sample-data/)). Do not commit custom models to the repo (the folder is gitignored).
+I've bundled the official free sample model **Momose Hiyori** in the repo (license details are in the model's `ReadMe.txt` and the [official license page](https://www.live2d.com/zh-CHS/download/sample-data/)). If you use custom models, watch out for copyrights and don't commit them (the folder is gitignored).
 
-> ⚠️ This release does not include any model files except the bundled official sample model Momose Hiyori.
+> ⚠️ Let me be clear: to avoid copyright drama, this release contains ZERO model files other than the official, freely distributable Momose Hiyori.
 
 ## Controls
+<a id="controls"></a>
 
-| Action | Effect |
+| What you do | What it does |
 | --- | --- |
-| Single-click model | Poke — random motion/expression |
-| Double-click model | Toggle input bar; Enter to send |
-| Arrow button (bottom-left) | Toggle input bar (below the bubble dot) |
-| Round mic button (input bar, left) | Voice input: click to start/stop recording, auto-sends after recognition (grey = service not ready or disabled) |
-| Drag model | Move window |
-| Drag bottom-right handle | Resize window & model (remembered) |
-| Right-click | Chat / switch model / click-through / settings / quit |
-| `Ctrl+Shift+P` | Toggle click-through (only hotkey or tray can revert) |
-| Pink dot on bubble / click bubble | Collapse bubble (auto-collapses 15s after replies) |
-| Tray icon | Toggle click-through / quit |
+| Single-click the pet | Poke it — triggers a random motion or expression |
+| Double-click the pet | Toggles the input bar; hit Enter to send your message |
+| Click the bottom-left arrow button | Toggles the input bar (it's right under the pink dot on the bubble) |
+| Click the round mic button on the input bar | Voice input: click to start/stop recording, auto-sends once transcribed (if it's grey, the service isn't ready or it's dead) |
+| Drag the pet | Moves the window around |
+| Drag the translucent handle on the bottom-right | Resizes the window & model (it remembers the size) |
+| Right-click the pet | Chat / Switch model / Click-through / Settings / Quit |
+| Press `Ctrl+Shift+P` | Toggles click-through (if it's transparent to clicks, you can only revert via hotkey or the tray icon) |
+| Click the pink dot on the bubble / Click the bubble itself | Collapses the text bubble (it also auto-hides 15s after a reply) |
+| Right-click the tray icon | Recover the pet: Toggle click-through / Quit |
 
-## Build from source
+## Build from Source (For the Hardcore)
+<a id="build-from-source"></a>
 
-Prerequisites: Node.js v20+, Rust stable (rustup), VS 2022 Build Tools, Python 3.
+Prerequisites: You need Node.js v20+, a stable Rust toolchain (rustup), VS 2022 Build Tools, and Python 3.
 
 ```bash
 git clone https://github.com/Koishi-Neko/astrbot_plugin_desktop_pet
 cd astrbot_plugin_desktop_pet/pet_shell
 npm install
-npm run dev     # first run auto-downloads Live2D renderer libs (or: npm run setup)
-npm run build   # standalone exe: src-tauri/target/release/pet_shell.exe
+npm run dev     # The first run auto-downloads the Live2D renderer libs (or run npm run setup manually)
+npm run build   # Spits out the standalone exe: src-tauri/target/release/pet_shell.exe
 ```
 
-> The Live2D renderer libraries (pixi / pixi-live2d-display / Live2D Cubism Core) are not committed for licensing reasons; `tools/fetch_vendor.py` downloads them with SHA256 verification. If downloads fail, check your network connection and re-run `npm run setup`.
-> Note: the debug exe produced via `npm run dev` shows a white screen when launched outside the CLI — use the `npm run build` artifact for standalone runs.
+> Why aren't the Live2D renderer libraries (pixi / pixi-live2d-display / Live2D Cubism Core) in the repo? Licensing. `tools/fetch_vendor.py` downloads them and checks the SHA256 hashes. If the download fails, check your internet (or VPN) and re-run `npm run setup`.
+> Note: If you run the debug exe produced by `npm run dev` outside of the CLI, you'll just get a white screen. For a standalone executable, always use the artifact from `npm run build`.
 
-You can preset configuration via `pet_shell/src/config.local.json` (gitignored; note that release builds **embed** this file — don't put private keys on a build machine, and prefer the settings panel for distributed users):
+If you want to bake in some config for users, drop a `config.local.json` in `pet_shell/src/` (it's gitignored; release builds **embed** this file, so **do NOT commit your private keys on a build machine**. It's better to let end-users configure it via the settings panel):
 
 ```json
 {
   "mode": "astrbot",
   "base_url": "http://localhost:6185",
-  "api_key": "your API Key",
+  "api_key": "Your API Key",
   "standalone": {
     "llm_base_url": "https://api.deepseek.com/v1",
-    "llm_api_key": "your model API Key",
+    "llm_api_key": "Your Model API Key",
     "llm_model": "deepseek-chat",
     "tts_url": "http://localhost:5000"
   },
@@ -204,22 +209,25 @@ You can preset configuration via `pet_shell/src/config.local.json` (gitignored; 
 }
 ```
 
-## FAQ
+## FAQ (When Things Break)
+<a id="faq"></a>
 
-- **Pet doesn't reply (AstrBot mode)**: run "Test connection" in settings for per-scope results; check AstrBot logs for `[desktop_pet] web api registered`; the API Key needs plugin+chat scopes (plus file for scene awareness).
-- **Pet doesn't reply (standalone mode)**: switch to standalone in settings and run "Test connection"; a base URL ending in `/v1` is safest (a bare root is auto-completed); local Ollama accepts any non-empty API Key.
-- **No long-term memory in standalone mode**: by design in V1 (in-session history still works); for memory use AstrBot mode with LivingMemory.
-- **Live2D not showing (source build)**: make sure the three js files exist under `src/vendor/` (`npm run setup`); non-ASCII model paths or non-Cubism 3/4 models also fail to load.
-- **No voice**: all three must be on — control page TTS switch with SBV2 reachable and model/speaker selected, plus the shell's "Voice" toggle (in standalone mode check the TTS URL in settings).
-- **Mic button grey / no reaction**: the voice-input switch is off (control page "Voice input" card) or the ASR service isn't ready (first load takes ~4 minutes — run `start_asr.vbs`; hover the button for the reason).
-- **Wrong transcription**: recognition is locked to Chinese by default; it's a local whisper model, so heavy accents or noisy environments hurt accuracy — speak a little slower, or check that the service URL points at your local ASR service.
-- **Replies don't change expressions**: when the model omits emotion tags the pet falls back to "calm"; reinforce the format in the persona prompt.
-- **Remote AstrBot**: just change the address in settings. The API Key is the credential — do not expose port 6185 to the public internet.
+- **The pet is playing dead (AstrBot mode)**: Open the settings panel and click "Test connection" to see which check fails. Look at your AstrBot logs for `[desktop_pet] web api registered`. Did you give your API Key both plugin and chat scopes? (Add the file scope too if you want scene awareness).
+- **The pet is playing dead (Standalone mode)**: Switch to standalone in settings and click "Test connection". Make sure your base URL ends in `/v1` (it tries to auto-complete bare roots, but play it safe). If you're on local Ollama, the API Key field can't be empty—just type anything.
+- **Standalone mode has goldfish memory**: Yep, that's by design in V1 (it remembers the current session, though). If you want long-term memory, go use AstrBot mode with the LivingMemory plugin.
+- **Live2D isn't rendering (Source build)**: Go check if the three js files exist under `src/vendor/` (run `npm run setup`). Also, if your model path has non-ASCII characters, or it isn't a Cubism 3/4 model, it's gonna fail to load.
+- **It's a mute (No Voice)**: Check three things: Is the TTS switch on in the control page? Is SBV2 "reachable"? Did you pick a model/speaker? Oh, and make sure the "Voice" toggle in the pet shell settings is actually on. (For standalone, check the TTS URL in settings).
+- **Mic button is grey / does nothing**: Did you turn on the voice-input switch in the control page? Is the ASR service actually running? (First boot takes ~4 mins; run `start_asr.vbs` to wake it up. Hover over the button to see what it's complaining about).
+- **The transcription is complete garbage**: It's locked to Chinese by default. Since it's a local whisper model, heavy accents or a noisy room will wreck its accuracy—try speaking slower. Or double-check the control page to ensure the URL points to your actual local ASR service.
+- **It replies, but its face never changes**: If the LLM doesn't output the emotion tags properly, the pet falls back to "calm", which is normal. Yell at your LLM in the persona prompt to strictly follow the formatting rules.
+- **My AstrBot is on a remote server**: Just change the address in the settings to your server's IP. The API Key is your password—**do NOT expose port 6185 to the public internet**.
 
-## Development Docs
+## Development Docs (For the Nerds)
+<a id="development-docs"></a>
 
-Architecture, API reference, SSE frame sequence, motion generation, debugging tips and the release process: [docs/dev.md](docs/dev.md) (Chinese).
+Wanna see the architecture, API references, SSE frame sequences, how motion generation works, debugging tips, or the release flow? Read [docs/dev.md](docs/dev.md) (It's in Chinese).
 
 ## License
+<a id="license"></a>
 
-Code: MIT. The bundled Momose Hiyori model is Live2D's official free sample data, redistributed under its [license terms](https://www.live2d.com/zh-CHS/download/sample-data/). Renderer libraries (pixi.js / pixi-live2d-display / Live2D Cubism Core) are downloaded by the build script under their own licenses and are not committed.
+My code is MIT. The bundled "Momose Hiyori" model is Live2D's official free sample data, redistributed loosely under their [license terms](https://www.live2d.com/zh-CHS/download/sample-data/). The renderer libraries (pixi.js / pixi-live2d-display / Live2D Cubism Core) are fetched by the build scripts under their respective licenses and aren't committed to this repo.
