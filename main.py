@@ -14,11 +14,14 @@
 - astrbot_plugin_desktop_pet/page/*                             WebUI 控制页后端
 
 内置长期记忆（pet_memory.py，独立于 LivingMemory）：桌宠/私聊/群聊三范围消息落
-chat_log（群聊经被动监听滚动缓冲拼接触发前文），攒满 memory_reflect_rounds 轮后由
-LLM 反思抽取记忆条目（档案/事件/心情/约定/观察），嵌入模型向量入库；对话时按
-余弦相似度 + 重要度/时效混合重排召回（独立开关可隔离范围召回池），经
-extra_user_content_parts 瞬时注入（不落会话历史）。无 embedding provider 时自动降级为
-「重要度+时效」召回，功能不拒用。每日 04:40 维护（衰减/软删/补嵌/桌宠日记）。
+chat_log（群聊经被动监听滚动缓冲拼接触发前文），每个范围各自攒满
+memory_reflect_batch_messages 条消息后由 LLM 反思抽取记忆条目（档案/事件/心情/约定/观察），
+嵌入模型向量入库；对话时按余弦相似度 + 重要度/时效混合重排召回（默认 3 条，
+独立开关可隔离范围召回池），经 extra_user_content_parts 瞬时注入（不落会话历史）。
+主人发「记住 xxx」/「永久记住 xxx」可直接下令写入（普通=重要档/永久=永不遗忘），
+固定回复并终止后续管线。重要度即耐久度：1/2/3/4 档约 15/30/60/120 天未召回即降级，
+1 档超期软删，5 档永久免疫。无 embedding provider 时自动降级为「重要度+时效」召回，
+功能不拒用。每日 04:40 维护（衰减/软删/补嵌/桌宠日记）。
 
 TTS：配置 tts_enabled=true 后，要求模型输出「【情绪】中文正文【JP】日语配音稿」，
 壳端解析出日语句后逐句调 pet/tts，插件转发 Style-Bert-VITS2（server_fastapi）合成返回 base64 wav。
@@ -62,6 +65,7 @@ try:  # AstrBot 以包方式加载插件；pytest 平面布局回退为同级导
         now_str,
         parse_dt,
         parse_memories_json,
+        parse_remember_command,
         pool_scopes,
         strip_leading_tags,
     )
@@ -81,6 +85,7 @@ except ImportError:
         now_str,
         parse_dt,
         parse_memories_json,
+        parse_remember_command,
         pool_scopes,
         strip_leading_tags,
     )
@@ -185,7 +190,7 @@ MEMORY_CONFIG_KEYS = (
     "memory_enabled",
     "memory_embedding_provider_id",
     "memory_provider_id",
-    "memory_reflect_rounds",
+    "memory_reflect_batch_messages",
     "memory_recall_top_k",
     "memory_recall_min_score",
     "memory_recall_max_chars",
@@ -225,8 +230,8 @@ DEFAULT_INTENT_PERCEIVE_KEYWORDS = (
     "看看桌面\n看看窗口\n当前窗口\n屏幕上\n看看这个\n"
     "look at my screen\nwhat's on my screen\nwhat am i doing"
 )
-DEFAULT_MEMORY_REFLECT_ROUNDS = 8
-DEFAULT_MEMORY_RECALL_TOP_K = 5
+DEFAULT_MEMORY_REFLECT_BATCH_MESSAGES = 8
+DEFAULT_MEMORY_RECALL_TOP_K = 3
 DEFAULT_MEMORY_RECALL_MIN_SCORE = 0.35
 DEFAULT_MEMORY_RECALL_MAX_CHARS = 800
 DEFAULT_MEMORY_GROUP_CONTEXT_COUNT = 10
@@ -385,6 +390,12 @@ class DesktopPetBridge(Star):
             self.page_memory_recall_test,
             ["POST"],
             "桌宠控制页：记忆召回测试",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/memory_graph",
+            self.page_memory_graph,
+            ["GET"],
+            "桌宠控制页：记忆图谱（向量近邻边）",
         )
         logger.info(
             "[desktop_pet] web api registered: desktop_pet/pet/*, desktop_pet/page/*"
@@ -970,17 +981,17 @@ class DesktopPetBridge(Star):
     def _memory_enabled(self) -> bool:
         return bool(self.config.get("memory_enabled", True))
 
-    def _memory_reflect_rounds(self) -> int:
+    def _memory_reflect_batch_messages(self) -> int:
         try:
             return max(
                 2,
                 int(
-                    self.config.get("memory_reflect_rounds")
-                    or DEFAULT_MEMORY_REFLECT_ROUNDS
+                    self.config.get("memory_reflect_batch_messages")
+                    or DEFAULT_MEMORY_REFLECT_BATCH_MESSAGES
                 ),
             )
         except (TypeError, ValueError):
-            return DEFAULT_MEMORY_REFLECT_ROUNDS
+            return DEFAULT_MEMORY_REFLECT_BATCH_MESSAGES
 
     def _memory_recall_top_k(self) -> int:
         try:
@@ -1263,15 +1274,70 @@ class DesktopPetBridge(Star):
             return
         try:
             self._mem_store.log_message("assistant", core, scope)
-            if (
-                self._mem_store.unreflected_pairs_count()
-                >= self._memory_reflect_rounds()
-            ):
+            batch = self._memory_reflect_batch_messages()
+            if self._mem_store.unreflected_count(scope) >= batch:
                 task = self._mem_reflect_task
                 if task is None or task.done():
-                    self._mem_reflect_task = asyncio.create_task(self._memory_reflect())
+                    # 当时所有达到阈值的 scope 一并处理
+                    due = [
+                        s
+                        for s in MEMORY_SCOPES
+                        if self._mem_store.unreflected_count(s) >= batch
+                    ]
+                    self._mem_reflect_task = asyncio.create_task(
+                        self._memory_reflect(due)
+                    )
         except Exception as e:
             logger.warning(f"[desktop_pet] memory log assistant msg failed: {e}")
+
+    # ---- 「记住 xxx」/「永久记住 xxx」指令：主人直写记忆，固定回复并终止后续管线 ----
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def memory_remember_command(self, event: AstrMessageEvent):
+        if not self._memory_enabled() or self._mem_store is None:
+            return  # 记忆未启用/未就绪：不拦截，消息正常走 LLM
+        umo = event.unified_msg_origin or ""
+        try:
+            sender = str(event.get_sender_id() or "").strip()
+        except Exception:
+            sender = ""
+        master = self._master_qq()
+        if not (self._is_pet_umo(umo) or (master and sender == master)):
+            return  # 非主人：不拦截其消息
+        parsed = parse_remember_command(str(event.get_message_str() or ""))
+        if parsed is None:
+            return
+        scope = self._memory_scope_of(event)
+        if scope is None:
+            return
+        permanent, content = parsed
+        content = self._memory_rewrite_identity(content)
+        store = self._mem_store
+        dup = await asyncio.to_thread(store.find_duplicate, content)
+        if dup is not None:
+            yield event.plain_result("这条我已经记着了。")
+            event.stop_event()
+            return
+        vec = model = None
+        embedded = await self._memory_embed_texts([content])
+        if embedded:
+            vec, model = embedded[0][0], embedded[1]
+        try:
+            await asyncio.to_thread(
+                store.add_memory,
+                "fact",
+                content,
+                5 if permanent else 4,
+                "command",
+                vec,
+                model,
+                scope,
+            )
+        except Exception as e:
+            logger.warning(f"[desktop_pet] remember command add failed: {e}")
+            return
+        yield event.plain_result("这条我会永远记住的。" if permanent else "记住啦。")
+        event.stop_event()
 
     # ---- 召回注入钩子：priority=-5，晚于其它注入型插件、早于格式注入(-10) ----
 
@@ -1377,89 +1443,101 @@ class DesktopPetBridge(Star):
             "vector": used_vector,
         }
 
-    # ---- 反思：事件驱动，攒满 N 轮抽取一次；失败即跳过、光标照常前进，不留积压 ----
+    # ---- 反思：事件驱动，每个 scope 各自攒满 N 条消息抽取一次；失败即跳过、光标照常前进，不留积压 ----
 
-    async def _memory_reflect(self):
+    async def _memory_reflect(self, scopes=None):
+        """scopes=None：处理所有有未反思消息的 scope；否则只处理给定 scope。"""
         store = self._mem_store
         if store is None:
             return
-        max_id = None
-        try:
-            rows, max_id = await asyncio.to_thread(
-                store.unreflected_window, self._memory_reflect_rounds()
-            )
-            if not rows:
-                return
-            provider = await self._memory_llm_provider()
-            if provider is None:
-                logger.warning("[desktop_pet] memory reflect skipped: no llm provider")
-                return
-            # 按来源范围分组：每组单独反思，产物落在对应 scope
-            groups: dict[str, list] = {}
-            for row in rows:
-                groups.setdefault(row[4] if len(row) > 4 else "pet", []).append(row)
-            for scope, srows in groups.items():
+        if scopes is None:
+            todo = []
+            for s in MEMORY_SCOPES:
                 try:
-                    system = REFLECT_SYSTEM + (
-                        REFLECT_SYSTEM_GROUP_ADDENDUM if scope == "group" else ""
-                    )
-                    resp = await provider.text_chat(
-                        prompt=build_reflect_prompt(
-                            srows, self._master_name(), scope=scope
-                        ),
-                        system_prompt=system,
-                    )
-                    items = parse_memories_json(getattr(resp, "completion_text", "") or "")
-                    new_items = []
-                    seen_norm = set()
-                    for it in items:
-                        it["content"] = self._memory_rewrite_identity(it["content"])
-                        n = norm_text(it["content"])
-                        if n in seen_norm:
-                            continue
-                        seen_norm.add(n)
-                        dup = await asyncio.to_thread(store.find_duplicate, it["content"])
-                        if dup is None:
-                            new_items.append(it)
-                    embedded = await self._memory_embed_texts(
-                        [it["content"] for it in new_items]
-                    )
-                    for i, it in enumerate(new_items):
-                        vec = model = None
-                        if embedded:
-                            vec, model = embedded[0][i], embedded[1]
-                        await asyncio.to_thread(
-                            store.add_memory,
-                            it["kind"],
-                            it["content"],
-                            it["importance"],
-                            "chat",
-                            vec,
-                            model,
-                            scope,
-                        )
-                    logger.info(
-                        f"[desktop_pet] memory reflect[{scope}]: +{len(new_items)} memories "
-                        f"({len(items)} extracted, {len(srows)} msgs)"
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.warning(
-                        f"[desktop_pet] memory reflect[{scope}] failed (skipped): {e}"
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"[desktop_pet] memory reflect failed (skipped): {e}")
-        finally:
-            if max_id:
-                try:
-                    await asyncio.to_thread(store.mark_reflected, max_id)
-                    await asyncio.to_thread(store.set_meta, "last_reflect_at", now_str())
-                    await asyncio.to_thread(store.prune_chat_log, 200)
+                    if await asyncio.to_thread(store.unreflected_count, s) > 0:
+                        todo.append(s)
                 except Exception:
                     pass
+        else:
+            todo = [s for s in dict.fromkeys(scopes) if s in MEMORY_SCOPES]
+        if not todo:
+            return
+        max_msgs = min(60, self._memory_reflect_batch_messages() * 4)
+        provider = None
+        provider_fetched = False
+        for scope in todo:
+            max_id = None
+            try:
+                rows, last_id = await asyncio.to_thread(
+                    store.unreflected_window, scope, max_msgs
+                )
+                if not rows:
+                    continue
+                max_id = last_id
+                if not provider_fetched:
+                    provider = await self._memory_llm_provider()
+                    provider_fetched = True
+                if provider is None:
+                    logger.warning(
+                        "[desktop_pet] memory reflect skipped: no llm provider"
+                    )
+                    continue
+                system = REFLECT_SYSTEM + (
+                    REFLECT_SYSTEM_GROUP_ADDENDUM if scope == "group" else ""
+                )
+                resp = await provider.text_chat(
+                    prompt=build_reflect_prompt(rows, self._master_name(), scope=scope),
+                    system_prompt=system,
+                )
+                items = parse_memories_json(getattr(resp, "completion_text", "") or "")
+                new_items = []
+                seen_norm = set()
+                for it in items:
+                    it["content"] = self._memory_rewrite_identity(it["content"])
+                    n = norm_text(it["content"])
+                    if n in seen_norm:
+                        continue
+                    seen_norm.add(n)
+                    dup = await asyncio.to_thread(store.find_duplicate, it["content"])
+                    if dup is None:
+                        new_items.append(it)
+                embedded = await self._memory_embed_texts(
+                    [it["content"] for it in new_items]
+                )
+                for i, it in enumerate(new_items):
+                    vec = model = None
+                    if embedded:
+                        vec, model = embedded[0][i], embedded[1]
+                    await asyncio.to_thread(
+                        store.add_memory,
+                        it["kind"],
+                        it["content"],
+                        it["importance"],
+                        "chat",
+                        vec,
+                        model,
+                        scope,
+                    )
+                logger.info(
+                    f"[desktop_pet] memory reflect[{scope}]: +{len(new_items)} memories "
+                    f"({len(items)} extracted, {len(rows)} msgs)"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    f"[desktop_pet] memory reflect[{scope}] failed (skipped): {e}"
+                )
+            finally:
+                if max_id:
+                    try:
+                        await asyncio.to_thread(store.mark_reflected, scope, max_id)
+                        await asyncio.to_thread(
+                            store.set_meta, "last_reflect_at", now_str()
+                        )
+                        await asyncio.to_thread(store.prune_chat_log, 200)
+                    except Exception:
+                        pass
 
     # ---- 每日维护（04:40）：重要度衰减 / 陈旧软删 / 补嵌向量 / 桌宠日记 ----
 
@@ -1696,7 +1774,7 @@ class DesktopPetBridge(Star):
                     self.config.get("memory_embedding_provider_id") or ""
                 ),
                 "memory_provider_id": str(self.config.get("memory_provider_id") or ""),
-                "memory_reflect_rounds": self._memory_reflect_rounds(),
+                "memory_reflect_batch_messages": self._memory_reflect_batch_messages(),
                 "memory_recall_top_k": self._memory_recall_top_k(),
                 "memory_recall_min_score": self._memory_recall_min_score(),
                 "memory_recall_max_chars": self._memory_recall_max_chars(),
@@ -1726,7 +1804,7 @@ class DesktopPetBridge(Star):
                 if k in MEMORY_CONFIG_BOOL_KEYS:
                     v = bool(v)
                 elif k in (
-                    "memory_reflect_rounds",
+                    "memory_reflect_batch_messages",
                     "memory_recall_top_k",
                     "memory_recall_max_chars",
                     "memory_group_context_count",
@@ -1861,6 +1939,14 @@ class DesktopPetBridge(Star):
             "vector": result["vector"],
             "scope": scope,
         }
+
+    async def page_memory_graph(self):
+        """记忆图谱：节点 + 向量近邻边（无向量索引时仅节点）。"""
+        if self._mem_store is None:
+            return error_response("记忆存储未就绪", status_code=500)
+        prov = self._memory_embed_provider()
+        model = self._memory_embed_model_id(prov) if prov else None
+        return await asyncio.to_thread(self._mem_store.graph_data, model)
 
     # ---------- 内部逻辑 ----------
 

@@ -11,6 +11,10 @@ embedding / LLM provider 全部由调用方（main.py）注入，便于单元测
 - 时间戳一律 ISO 文本（%Y-%m-%d %H:%M:%S），绝不写 float（避免解析灾难）。
 - 范围（scope）：pet / private / group。每条记忆与每行 chat_log 记录来源 scope；
   召回池由「独立开关」在召回时动态计算（pool_scopes），切开关即重分区存量数据。
+- 反思光标按 scope 拆分（last_reflected_log_id_{scope}），各范围独立攒批触发。
+- 耐久度分级：重要度即保质期（1≈15 天 / 2≈30 / 3≈60 / 4≈120 天未召回降级，
+  5 永久免疫，1 级超期软删），freshness 时钟 = COALESCE(last_recalled_at, created_at)。
+- 「记住 xxx」/「永久记住 xxx」指令解析见 parse_remember_command（纯函数）。
 """
 
 from __future__ import annotations
@@ -42,6 +46,23 @@ SCOPE_LABELS = {
     "private": "私聊",
     "group": "群聊",
 }
+
+# 重要度驱动的耐久度分级：超过对应天数未召回即降 1 级（importance 5 永久免疫；
+# 1 级超期软删）。freshness 时钟 = COALESCE(last_recalled_at, created_at)。
+DECAY_TIER_DAYS = {4: 120, 3: 60, 2: 30, 1: 15}
+
+_REMEMBER_RE = re.compile(r"^\s*(永久记住|永远记住|记住)\s*[:：,，]?\s*(.{2,})\s*$")
+
+
+def parse_remember_command(text: str) -> tuple[bool, str] | None:
+    """「记住 xxx」/「永久记住 xxx」指令解析；命中返回 (是否永久, 内容)，否则 None。
+
+    「你还记得…」「记住啦」（内容不足 2 字）等不命中。
+    """
+    m = _REMEMBER_RE.match(text or "")
+    if not m:
+        return None
+    return (m.group(1) != "记住", m.group(2).strip())
 
 
 def pool_scopes(scope: str, independent) -> list[str]:
@@ -325,7 +346,8 @@ REFLECT_SYSTEM = (
     "- content 用简洁的陈述句；提到主人时一律使用给出的主人称呼，绝对不要出现 "
     "\"desktop_pet\"、「用户」这类称呼\n"
     "- 相对时间（今天/昨天/下周）必须按对话时间戳换算成具体日期\n"
-    "- importance：1=琐事 … 5=极其重要（生日、重大事件、明确承诺）\n"
+    "- importance：1=琐事（约 15 天后被遗忘）… 2=次要（约 30 天）… 3=普通（约 60 天）… "
+    "4=重要（约 120 天）… 5=永久记住（永不遗忘，仅用于生日、重大约定、主人明确要求永久记住的事，慎用）\n"
     "- 最多 8 条，宁缺毋滥\n"
     "- 只输出 JSON 数组，不要输出任何其他文字"
 )
@@ -492,30 +514,48 @@ class PetMemoryStore:
                 (scope,),
             )
 
-    def unreflected_window(self, max_pairs: int):
-        """返回 (rows, max_id)：光标之后的最多 max_pairs*2 条消息与其末行 id。
+    # 反思光标按 scope 拆分：last_reflected_log_id_{scope}
+    def _reflect_cursor(self, scope: str) -> int:
+        """该 scope 的反思光标；无独立光标时以旧全局光标初始化（避免重反思存量）。"""
+        if scope not in MEMORY_SCOPES:
+            scope = "pet"
+        key = f"last_reflected_log_id_{scope}"
+        val = self.get_meta(key)
+        if val is None:
+            val = self.get_meta("last_reflected_log_id", "0") or "0"
+            self.set_meta(key, val)
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return 0
+
+    def unreflected_count(self, scope: str) -> int:
+        """该 scope 光标之后的 chat_log 条数（按消息条数，不按轮）。"""
+        last = self._reflect_cursor(scope)
+        with self._connect() as con:
+            return con.execute(
+                "SELECT COUNT(*) FROM chat_log WHERE scope=? AND id > ?",
+                (scope, last),
+            ).fetchone()[0]
+
+    def unreflected_window(self, scope: str, max_msgs: int):
+        """返回 (rows, max_id)：该 scope 光标之后最多 max_msgs 条消息与其末行 id。
 
         rows 为 5 元组 (id, role, content, created_at, scope)。
         """
-        last = int(self.get_meta("last_reflected_log_id", "0") or 0)
+        last = self._reflect_cursor(scope)
         with self._connect() as con:
             rows = con.execute(
                 "SELECT id, role, content, created_at, scope FROM chat_log "
-                "WHERE id > ? ORDER BY id LIMIT ?",
-                (last, max(2, max_pairs * 2)),
+                "WHERE scope=? AND id > ? ORDER BY id LIMIT ?",
+                (scope, last, max(1, int(max_msgs))),
             ).fetchall()
         return rows, (rows[-1][0] if rows else last)
 
-    def unreflected_pairs_count(self) -> int:
-        last = int(self.get_meta("last_reflected_log_id", "0") or 0)
-        with self._connect() as con:
-            n = con.execute(
-                "SELECT COUNT(*) FROM chat_log WHERE id > ?", (last,)
-            ).fetchone()[0]
-        return n // 2
-
-    def mark_reflected(self, max_id: int) -> None:
-        self.set_meta("last_reflected_log_id", str(max_id))
+    def mark_reflected(self, scope: str, max_id: int) -> None:
+        if scope not in MEMORY_SCOPES:
+            scope = "pet"
+        self.set_meta(f"last_reflected_log_id_{scope}", str(max_id))
 
     def prune_chat_log(self, keep: int = 200) -> None:
         with self._connect() as con:
@@ -695,7 +735,7 @@ class PetMemoryStore:
             "with_embedding": with_emb,
             "missing_embedding": total - with_emb,
             "stale_embedding": stale,
-            "unreflected_pairs": self.unreflected_pairs_count(),
+            "unreflected": {s: self.unreflected_count(s) for s in MEMORY_SCOPES},
             "chat_log_rows": log_rows,
             "last_reflect_at": self.get_meta("last_reflect_at"),
             "last_diary_date": self.get_meta("last_diary_date"),
@@ -729,26 +769,120 @@ class PetMemoryStore:
             self.vec_remove(mid)
             self.vec_add(mid, vec)
 
-    def apply_decay(self):
-        """每日维护：久未召回的非档案类记忆重要度 -1；陈旧的 1 分记忆软删。返回 (decayed, archived)。"""
-        from datetime import timedelta
+    def apply_decay(self, now=None) -> tuple[int, int]:
+        """每日维护：重要度即耐久度——超过档位天数未召回降 1 级，1 级超期软删。
 
-        now = datetime.now()
-        before30 = (now - timedelta(days=30)).strftime(_TIME_FMT)
-        before180 = (now - timedelta(days=180)).strftime(_TIME_FMT)
+        freshness 时钟 = COALESCE(last_recalled_at, created_at)；importance 5 永久免疫。
+        档位见 DECAY_TIER_DAYS（diary 固定 3 分 = 60 天档）。返回 (decayed, archived)。
+        """
+        now = now or datetime.now()
+        decay_ids: list[int] = []
+        archive_ids: list[int] = []
         with self._connect() as con:
-            cur1 = con.execute(
-                "UPDATE memories SET importance=importance-1 WHERE active=1 "
-                "AND kind NOT IN ('profile','promise','diary') AND importance > 1 "
-                "AND created_at < ? AND (last_recalled_at IS NULL OR last_recalled_at < ?)",
-                (before30, before30),
-            )
-            cur2 = con.execute(
-                "UPDATE memories SET active=0 WHERE active=1 AND importance <= 1 "
-                "AND created_at < ? AND recall_count = 0",
-                (before180,),
-            )
-        return cur1.rowcount, cur2.rowcount
+            rows = con.execute(
+                "SELECT id, importance, created_at, last_recalled_at FROM memories "
+                "WHERE active=1 AND importance<5"
+            ).fetchall()
+            for mid, imp, created, recalled in rows:
+                dt = parse_dt(recalled) or parse_dt(created)
+                if dt is None:
+                    continue
+                days = (now - dt).total_seconds() / 86400.0
+                tier = DECAY_TIER_DAYS.get(int(imp))
+                if tier is None or days < tier:
+                    continue
+                if int(imp) <= 1:
+                    archive_ids.append(mid)
+                else:
+                    decay_ids.append(mid)
+            for mid in decay_ids:
+                con.execute(
+                    "UPDATE memories SET importance=importance-1 WHERE id=? AND active=1",
+                    (mid,),
+                )
+            for mid in archive_ids:
+                con.execute("UPDATE memories SET active=0 WHERE id=?", (mid,))
+        for mid in archive_ids:
+            self.vec_remove(mid)  # 索引只含 active 行，软删同步移除
+        return len(decay_ids), len(archive_ids)
+
+    # ---------- 记忆图谱（控制页可视化） ----------
+
+    def graph_data(self, emb_model: str | None = None, limit: int = 200,
+                   neighbors: int = 3, min_cos: float = 0.5) -> dict:
+        """返回 {"nodes", "edges", "vector", "reason"?}；向量不可用时仅节点。
+
+        节点取 active 且已向量的记忆（emb_model 给定时只取该模型），按重要度排序。
+        边为 faiss 近邻（排除自身与 cos<min_cos，按 (a<b) 去重，w 保留 3 位）。
+        """
+        sql = (
+            "SELECT id, kind, scope, importance, content, created_at, embedding, "
+            "emb_dim, emb_model FROM memories "
+            "WHERE active=1 AND embedding IS NOT NULL"
+        )
+        params: list = []
+        if emb_model:
+            sql += " AND emb_model=?"
+            params.append(emb_model)
+        sql += " ORDER BY importance DESC, id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._connect() as con:
+            rows = con.execute(sql, params).fetchall()
+
+        def _node(r) -> dict:
+            return {
+                "id": r[0],
+                "kind": r[1],
+                "scope": r[2],
+                "importance": r[3],
+                "content": str(r[4] or "")[:40],
+                "created_at": r[5],
+            }
+
+        # 边只在同一嵌入空间内有意义：emb_model 未给定时取行数最多的模型
+        if not emb_model and rows:
+            counts: dict = {}
+            for r in rows:
+                counts[r[8]] = counts.get(r[8], 0) + 1
+            emb_model = max(counts, key=counts.get)
+        cands = [r for r in rows if not emb_model or r[8] == emb_model]
+        if len(cands) < 3:
+            return {
+                "nodes": [],
+                "edges": [],
+                "vector": False,
+                "reason": "可入图的向量记忆不足 3 条",
+            }
+        nodes = [_node(r) for r in cands]
+        dim = cands[0][7] or 0
+        if not self._load_faiss() or not self.ensure_index(emb_model, dim):
+            return {
+                "nodes": nodes,
+                "edges": [],
+                "vector": False,
+                "reason": "向量索引不可用，仅显示节点",
+            }
+        edges: dict[tuple[int, int], float] = {}
+        k = max(1, int(neighbors)) + 1
+        for r in cands:
+            try:
+                hits = self.vec_search(blob_to_vec(r[6]), k)
+            except Exception:
+                continue
+            for mid, cos in hits:
+                if mid == r[0] or cos < min_cos:
+                    continue
+                a, b = (r[0], mid) if r[0] < mid else (mid, r[0])
+                if (a, b) not in edges or cos > edges[(a, b)]:
+                    edges[(a, b)] = cos
+        return {
+            "nodes": nodes,
+            "edges": [
+                {"a": a, "b": b, "w": round(w, 3)}
+                for (a, b), w in sorted(edges.items(), key=lambda kv: -kv[1])
+            ],
+            "vector": True,
+        }
 
     # ---------- LivingMemory 导入 ----------
 

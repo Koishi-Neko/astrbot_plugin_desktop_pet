@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pet_memory import (
+    DECAY_TIER_DAYS,
     PetMemoryStore,
     blend_score,
     blob_to_vec,
@@ -17,6 +18,7 @@ from pet_memory import (
     norm_text,
     parse_dt,
     parse_memories_json,
+    parse_remember_command,
     strip_leading_tags,
     vec_to_blob,
 )
@@ -121,18 +123,39 @@ def test_prompt_builders():
     assert "2026-09-10" in d and "日记" in d
 
 
+def test_parse_remember_command():
+    # 普通「记住」→ 非永久；可选冒号/逗号与首尾空白容忍
+    assert parse_remember_command("记住 主人怕黑") == (False, "主人怕黑")
+    assert parse_remember_command("记住：主人怕黑") == (False, "主人怕黑")
+    assert parse_remember_command("记住, 主人怕黑") == (False, "主人怕黑")
+    assert parse_remember_command("  记住，主人怕黑  ") == (False, "主人怕黑")
+    assert parse_remember_command("记住主人怕黑") == (False, "主人怕黑")
+    # 永久/永远 → permanent=True
+    assert parse_remember_command("永久记住 主人的生日是 6 月 1 日") == (True, "主人的生日是 6 月 1 日")
+    assert parse_remember_command("永远记住：主人对花粉过敏") == (True, "主人对花粉过敏")
+    # 不命中：疑问句、内容不足 2 字、无内容、非开头指令
+    assert parse_remember_command("你还记得我吗") is None
+    assert parse_remember_command("你还记得主人怕黑吗") is None
+    assert parse_remember_command("记住啦") is None
+    assert parse_remember_command("记住") is None
+    assert parse_remember_command("记住 ") is None
+    assert parse_remember_command("别记住这件事") is None
+    assert parse_remember_command("") is None
+    assert parse_remember_command(None) is None
+
+
 # ---------- PetMemoryStore（tmp sqlite） ----------
 
 
 def test_store_crud_and_cursor(store):
     store.log_message("user", "你好")
     store.log_message("assistant", "你好呀主人")
-    assert store.unreflected_pairs_count() == 1
-    rows, max_id = store.unreflected_window(8)
+    assert store.unreflected_count("pet") == 2
+    rows, max_id = store.unreflected_window("pet", 8)
     assert len(rows) == 2
-    store.mark_reflected(max_id)
-    assert store.unreflected_pairs_count() == 0
-    assert store.unreflected_window(8)[0] == []
+    store.mark_reflected("pet", max_id)
+    assert store.unreflected_count("pet") == 0
+    assert store.unreflected_window("pet", 8)[0] == []
 
     mid = store.add_memory("profile", "主人叫小智", 5, "chat")
     assert store.find_duplicate("主人叫 小智") is not None  # 规范化去重
@@ -149,7 +172,35 @@ def test_store_crud_and_cursor(store):
 def test_store_skip_pair(store):
     store.log_message("user", "（场景）主人在看视频")
     store.delete_last_user_message()
-    assert store.unreflected_pairs_count() == 0
+    assert store.unreflected_count("pet") == 0
+
+
+def test_reflect_cursor_per_scope_and_migration(store):
+    """反思光标按 scope 独立；旧全局光标自动迁移为各 scope 的初始值。"""
+    # 存量：旧全局光标 = 2（前两行已反思过）
+    store.log_message("user", "旧一", "pet")
+    store.log_message("assistant", "旧二", "pet")
+    store.set_meta("last_reflected_log_id", "2")
+    store.log_message("user", "新一", "pet")
+    store.log_message("user", "群一", "group")
+    # pet 光标迁移为 2 → 只数到「新一」；group 光标同样从 2 起 → 数到「群一」
+    assert store.unreflected_count("pet") == 1
+    assert store.unreflected_count("group") == 1
+    assert store.get_meta("last_reflected_log_id_pet") == "2"  # 迁移落盘
+    rows, max_id = store.unreflected_window("pet", 10)
+    assert [r[2] for r in rows] == ["新一"]
+    # mark 只推进对应 scope
+    store.mark_reflected("pet", max_id)
+    assert store.unreflected_count("pet") == 0
+    assert store.unreflected_count("group") == 1
+    # 窗口限量
+    for i in range(5):
+        store.log_message("user", f"群消息 {i}", "group")
+    rows, max_id = store.unreflected_window("group", 3)
+    assert len(rows) == 3 and rows[-1][0] == max_id
+    # stats 的 unreflected 为三 scope 字典
+    st = store.stats()
+    assert st["unreflected"] == {"pet": 0, "private": 0, "group": 6}
 
 
 def test_store_stats_and_decay(store):
@@ -159,19 +210,67 @@ def test_store_stats_and_decay(store):
     assert st["total_active"] == 2
     assert st["by_kind"]["profile"] == 1
     assert st["missing_embedding"] == 2
-    # 人为造陈旧数据验证衰减：直接改 created_at（保持 ISO 文本格式）
-    old = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
-    older = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d %H:%M:%S")
+    assert set(st["unreflected"]) == {"pet", "private", "group"}
+
+
+_BASE_NOW = datetime(2026, 10, 1, 12, 0, 0)
+
+
+def _set_memory_age(store, mid, created_days, recalled_days=None):
+    """把记忆的 created_at / last_recalled_at 调成 _BASE_NOW 之前 N 天（ISO 文本）。"""
     con = sqlite3.connect(str(store.db_path))
-    con.execute("UPDATE memories SET created_at=? WHERE kind='event'", (old,))
-    con.execute("UPDATE memories SET created_at=?, importance=1 WHERE kind='profile'", (older,))
+    con.execute(
+        "UPDATE memories SET created_at=? WHERE id=?",
+        ((_BASE_NOW - timedelta(days=created_days)).strftime("%Y-%m-%d %H:%M:%S"), mid),
+    )
+    if recalled_days is not None:
+        con.execute(
+            "UPDATE memories SET last_recalled_at=? WHERE id=?",
+            ((_BASE_NOW - timedelta(days=recalled_days)).strftime("%Y-%m-%d %H:%M:%S"), mid),
+        )
     con.commit()
     con.close()
-    decayed, archived = store.apply_decay()
-    assert decayed == 1  # event 4→3
-    assert archived == 1  # 200 天未召回的 1 分 profile 软删
-    st = store.stats()
-    assert st["total_active"] == 1
+
+
+def test_apply_decay_importance_tiers(store):
+    assert DECAY_TIER_DAYS == {4: 120, 3: 60, 2: 30, 1: 15}
+    # 5 分永久免疫
+    m5 = store.add_memory("profile", "主人叫小智", 5, "chat")
+    _set_memory_age(store, m5, 400)
+    # 4 档 120 天：119 不动 / 121 降到 3
+    m4a = store.add_memory("event", "主人在准备答辩", 4, "chat")
+    _set_memory_age(store, m4a, 119)
+    m4b = store.add_memory("event", "主人换了工作", 4, "chat")
+    _set_memory_age(store, m4b, 121)
+    # 召回刷新时钟：创建 121 天但 5 天前召回过 → 不动
+    m4c = store.add_memory("event", "主人考过了科目二", 4, "chat")
+    _set_memory_age(store, m4c, 121, recalled_days=5)
+    # diary 固定 3 分 = 60 天档（不再豁免）
+    m3d = store.add_memory("diary", "2026-06-01 的日记：晴", 3, "diary")
+    _set_memory_age(store, m3d, 61)
+    # 2 档 30 天
+    m2 = store.add_memory("fact", "主人爱吃辣", 2, "chat")
+    _set_memory_age(store, m2, 31)
+    # 1 档 15 天超期软删（recall_count>0 不豁免，召回日同样超期）
+    m1a = store.add_memory("fact", "主人今天喝了奶茶", 1, "chat")
+    store.touch_recalled([m1a])
+    _set_memory_age(store, m1a, 16, recalled_days=16)
+    # 1 档未超期不动
+    m1b = store.add_memory("fact", "主人打了个喷嚏", 1, "chat")
+    _set_memory_age(store, m1b, 10)
+
+    decayed, archived = store.apply_decay(_BASE_NOW)
+    assert decayed == 3  # m4b 4→3，m3d 3→2，m2 2→1
+    assert archived == 1  # m1a
+    by_id = {m["id"]: m for m in store.list_memories("", limit=50)[0]}
+    assert by_id[m5]["importance"] == 5
+    assert by_id[m4a]["importance"] == 4
+    assert by_id[m4b]["importance"] == 3
+    assert by_id[m4c]["importance"] == 4
+    assert by_id[m3d]["importance"] == 2
+    assert by_id[m2]["importance"] == 1
+    assert by_id[m1b]["importance"] == 1
+    assert m1a not in by_id  # 软删
 
 
 def test_store_diary_log_query(store):
@@ -233,6 +332,50 @@ def test_vector_path_if_faiss(store):
     assert store.vec_search(v1, 3) == []  # 旧模型向量不进新索引
 
 
+def test_graph_data_too_few_nodes(store):
+    store.add_memory("fact", "主人喜欢苹果", 3, "chat", [1.0, 0.0], "test-emb")
+    store.add_memory("fact", "主人讨厌下雨", 3, "chat", [0.0, 1.0], "test-emb")
+    out = store.graph_data("test-emb")
+    assert out["vector"] is False and out["nodes"] == [] and out["edges"] == []
+    assert out["reason"]
+
+
+def test_graph_data_no_faiss(store):
+    store._faiss_ok = False  # 强制走无 faiss 分支
+    for i in range(3):
+        store.add_memory("fact", f"记忆 {i} 内容", 3, "chat", [1.0, 0.0], "test-emb")
+    long_content = "这是一条特别长的记忆" * 10
+    store.add_memory("fact", long_content, 4, "chat", [0.0, 1.0], "test-emb")
+    out = store.graph_data("test-emb")
+    assert out["vector"] is False
+    assert len(out["nodes"]) == 4 and out["edges"] == []
+    assert "向量索引不可用" in out["reason"]
+    assert set(out["nodes"][0]) == {"id", "kind", "scope", "importance", "content", "created_at"}
+    assert all(len(n["content"]) <= 40 for n in out["nodes"])  # 内容截 40 字
+
+
+def test_graph_data_with_faiss(store):
+    pytest.importorskip("faiss")
+    pytest.importorskip("numpy")
+    v1 = [1.0, 0.0, 0.0]
+    v2 = [0.95, 0.05, 0.0]
+    v3 = [0.0, 1.0, 0.0]
+    v4 = [0.0, 0.98, 0.02]
+    m1 = store.add_memory("fact", "主人喜欢苹果", 4, "chat", v1, "test-emb")
+    m2 = store.add_memory("fact", "主人喜欢苹果手机", 3, "chat", v2, "test-emb")
+    m3 = store.add_memory("fact", "主人讨厌下雨", 3, "chat", v3, "test-emb")
+    m4 = store.add_memory("fact", "主人讨厌打雷", 3, "chat", v4, "test-emb")
+    out = store.graph_data("test-emb", neighbors=2, min_cos=0.5)
+    assert out["vector"] is True and "reason" not in out
+    assert len(out["nodes"]) == 4
+    pairs = {(e["a"], e["b"]) for e in out["edges"]}
+    assert all(a < b for a, b in pairs)  # 边按 (a<b) 去重
+    assert (min(m1, m2), max(m1, m2)) in pairs  # 高相似成边
+    assert (min(m3, m4), max(m3, m4)) in pairs
+    assert (min(m1, m3), max(m1, m3)) not in pairs  # 正交低于阈值不成边
+    assert all(0.5 <= e["w"] <= 1.0 for e in out["edges"])
+
+
 # ---------- main.py 侧引擎（stub provider） ----------
 
 
@@ -257,7 +400,7 @@ def _make_bridge(tmp_path, llm_text="[]", master_name="小智"):
         "memory_enabled": True,
         "master_name": master_name,
         "pet_session_id": "desktop_pet",
-        "memory_reflect_rounds": 8,
+        "memory_reflect_batch_messages": 8,
     }
     bridge._mem_store = PetMemoryStore(tmp_path / "memory.db")
     bridge._mem_reflect_task = None
@@ -285,7 +428,7 @@ def test_reflect_flow_no_embedding(tmp_path):
     assert any("小智" in c and "desktop_pet" not in c for c in contents)
     assert contents.count("主人在准备升职答辩") == 1
     assert total == 2
-    assert bridge._mem_store.unreflected_pairs_count() == 0  # 光标前进
+    assert bridge._mem_store.unreflected_count("pet") == 0  # 光标前进
     assert bridge._mem_store.get_meta("last_reflect_at")
     assert "小智" in llm.calls[0]["prompt"]
 
@@ -296,7 +439,22 @@ def test_reflect_failure_skips_without_backlog(tmp_path):
     bridge._mem_store.log_message("assistant", "hello")
     asyncio.run(bridge._memory_reflect())
     assert bridge._mem_store.list_memories("")[1] == 0
-    assert bridge._mem_store.unreflected_pairs_count() == 0  # 失败也跳过，不积压
+    assert bridge._mem_store.unreflected_count("pet") == 0  # 失败也跳过，不积压
+
+
+def test_reflect_scopes_arg_and_cursor_isolation(tmp_path):
+    """scopes 参数只处理给定范围；各 scope 光标独立推进。"""
+    bridge, llm = _make_bridge(tmp_path)
+    bridge._mem_store.log_message("user", "桌宠说", "pet")
+    bridge._mem_store.log_message("user", "小明: 群里说", "group")
+    asyncio.run(bridge._memory_reflect(["pet"]))  # 只反思 pet
+    assert bridge._mem_store.unreflected_count("pet") == 0
+    assert bridge._mem_store.unreflected_count("group") == 1  # group 不动
+    assert len(llm.calls) == 1
+    # scopes=None：处理所有有未反思消息的 scope
+    asyncio.run(bridge._memory_reflect())
+    assert bridge._mem_store.unreflected_count("group") == 0
+    assert len(llm.calls) == 2
 
 
 def test_recall_block_fallback_no_embedding(tmp_path):
@@ -403,10 +561,10 @@ def test_log_message_scope_and_scoped_delete(store):
     store.log_message("user", "群聊消息", "group")
     store.log_message("assistant", "群聊回复", "group")
     store.delete_last_user_message("pet")  # 只删 pet 的最后一条 user
-    rows, _ = store.unreflected_window(10)
+    rows, _ = store.unreflected_window("group", 10)
     contents = [(r[1], r[2], r[4]) for r in rows]
     assert ("user", "群聊消息", "group") in contents
-    assert ("user", "桌宠消息", "pet") not in contents
+    assert store.unreflected_window("pet", 10)[0] == []  # pet 的 user 消息已被删
 
 
 def test_scope_filtered_queries(store):
@@ -621,3 +779,91 @@ def test_group_context_prefix_integration(tmp_path):
     ev_pet = MagicMock()
     ev_pet.get_group_id.side_effect = RuntimeError("not a group")
     assert bridge._group_context_prefix(ev_pet, "主人", "hi") == ""
+
+
+# ---------- 「记住 xxx」指令 handler（透传装饰器，直接调本体） ----------
+
+
+async def _collect(agen):
+    return [item async for item in agen]
+
+
+def _master_event(text, umo="webchat:FriendMessage:webchat!desktop_pet!desktop_pet",
+                  sender="1819987185"):
+    ev = MagicMock()
+    ev.unified_msg_origin = umo
+    ev.get_sender_id.return_value = sender
+    ev.get_message_str.return_value = text
+    mt = MagicMock()
+    mt.value = "FriendMessage"
+    ev.get_message_type.return_value = mt
+    return ev
+
+
+def test_remember_command_pet(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    bridge.config["master_qq"] = "1819987185"
+    ev = _master_event("记住 主人怕黑")
+    asyncio.run(_collect(bridge.memory_remember_command(ev)))
+    items, total = bridge._mem_store.list_memories("怕黑")
+    assert total == 1
+    m = items[0]
+    assert m["kind"] == "fact" and m["importance"] == 4
+    assert m["source"] == "command" and m["scope"] == "pet"
+    ev.plain_result.assert_called_once_with("记住啦。")
+    ev.stop_event.assert_called_once()
+
+
+def test_remember_command_permanent(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    bridge.config["master_qq"] = "1819987185"
+    ev = _master_event("永久记住：主人的生日是 6 月 1 日")
+    asyncio.run(_collect(bridge.memory_remember_command(ev)))
+    items, total = bridge._mem_store.list_memories("生日")
+    assert total == 1 and items[0]["importance"] == 5
+    ev.plain_result.assert_called_once_with("这条我会永远记住的。")
+    ev.stop_event.assert_called_once()
+
+
+def test_remember_command_duplicate(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    bridge.config["master_qq"] = "1819987185"
+    bridge._mem_store.add_memory("fact", "主人怕黑", 3, "chat")
+    ev = _master_event("记住 主人怕黑")
+    asyncio.run(_collect(bridge.memory_remember_command(ev)))
+    assert bridge._mem_store.list_memories("怕黑")[1] == 1  # 不重复入库
+    ev.plain_result.assert_called_once_with("这条我已经记着了。")
+    ev.stop_event.assert_called_once()
+
+
+def test_remember_command_master_private_scope(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    bridge.config["master_qq"] = "1819987185"
+    ev = _master_event(
+        "记住 主人怕黑", umo="napcat:FriendMessage:1819987185", sender="1819987185"
+    )
+    asyncio.run(_collect(bridge.memory_remember_command(ev)))
+    items, total = bridge._mem_store.list_memories("怕黑")
+    assert total == 1 and items[0]["scope"] == "private"
+
+
+def test_remember_command_ignored_cases(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    bridge.config["master_qq"] = "1819987185"
+    # 非主人：不拦截、不回复、不终止
+    ev = _master_event("记住 主人怕黑", umo="napcat:FriendMessage:999999", sender="999999")
+    asyncio.run(_collect(bridge.memory_remember_command(ev)))
+    assert bridge._mem_store.list_memories("")[1] == 0
+    ev.plain_result.assert_not_called()
+    ev.stop_event.assert_not_called()
+    # 非指令消息：不拦截
+    ev2 = _master_event("你还记得我怕黑吗")
+    asyncio.run(_collect(bridge.memory_remember_command(ev2)))
+    assert bridge._mem_store.list_memories("")[1] == 0
+    ev2.stop_event.assert_not_called()
+    # 记忆未启用：主人的指令也不拦截（消息正常走 LLM）
+    bridge.config["memory_enabled"] = False
+    ev3 = _master_event("记住 主人怕黑")
+    asyncio.run(_collect(bridge.memory_remember_command(ev3)))
+    assert bridge._mem_store.list_memories("")[1] == 0
+    ev3.stop_event.assert_not_called()

@@ -38,3 +38,15 @@ def pytest_configure():
 
     event_filter_mod.CustomFilter = MockCustomFilter
     sys.modules['astrbot.api.event.filter'] = event_filter_mod
+
+    # 「记住 xxx」指令 handler 用 @filter.event_message_type(filter.EventMessageType.ALL)
+    # 注册；改成透传装饰器以便测试直接调用 handler 本体（其余装饰器仍返回 MagicMock）
+    class MockEventMessageType:
+        GROUP_MESSAGE = "GROUP_MESSAGE"
+        PRIVATE_MESSAGE = "PRIVATE_MESSAGE"
+        OTHER_MESSAGE = "OTHER_MESSAGE"
+        ALL = "ALL"
+
+    _filter = sys.modules['astrbot.api.event'].filter
+    _filter.EventMessageType = MockEventMessageType
+    _filter.event_message_type = lambda *a, **k: (lambda f: f)

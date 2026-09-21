@@ -152,9 +152,9 @@
         "default": "",
         "invisible": true
     },
-    "memory_reflect_rounds": {
-        "description": "记忆反思触发轮数",
-        "hint": "每积攒多少轮对话进行一次记忆反思抽取。",
+    "memory_reflect_batch_messages": {
+        "description": "记忆反思批量消息数",
+        "hint": "每个范围（桌宠/私聊/群聊）各自积攒多少条消息后进行一次记忆反思抽取。",
         "type": "int",
         "default": 8,
         "invisible": true
@@ -163,7 +163,7 @@
         "description": "记忆召回条数",
         "hint": "每次对话最多注入多少条相关记忆（档案类常驻记忆不计入）。",
         "type": "int",
-        "default": 5,
+        "default": 3,
         "invisible": true
     },
     "memory_recall_min_score": {
