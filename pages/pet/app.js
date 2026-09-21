@@ -391,6 +391,7 @@ async function loadMemoryConfig() {
   $("memory-scope-pet-independent").checked = !!cfg.memory_scope_pet_independent;
   $("memory-scope-private-independent").checked = !!cfg.memory_scope_private_independent;
   $("memory-scope-group-independent").checked = !!cfg.memory_scope_group_independent;
+  $("memory-group-context-count").value = cfg.memory_group_context_count ?? 10;
   $("memory-embed-provider").value = cfg.memory_embedding_provider_id || "";
   $("memory-llm-provider").value = cfg.memory_provider_id || "";
   $("memory-reflect-rounds").value = cfg.memory_reflect_rounds ?? 8;
@@ -452,6 +453,7 @@ async function saveMemoryConfig() {
       memory_scope_pet_independent: $("memory-scope-pet-independent").checked,
       memory_scope_private_independent: $("memory-scope-private-independent").checked,
       memory_scope_group_independent: $("memory-scope-group-independent").checked,
+      memory_group_context_count: Number($("memory-group-context-count").value),
       memory_embedding_provider_id: $("memory-embed-provider").value.trim(),
       memory_provider_id: $("memory-llm-provider").value.trim(),
       memory_reflect_rounds: Number($("memory-reflect-rounds").value),

@@ -221,5 +221,12 @@
         "type": "bool",
         "default": false,
         "invisible": true
+    },
+    "memory_group_context_count": {
+        "description": "群聊前文条数",
+        "hint": "群聊触发时把该群最近 N 条消息作为前文一起落库，让反思看懂前因后果；0=关闭前文捕获。",
+        "type": "int",
+        "default": 10,
+        "invisible": true
     }
 }

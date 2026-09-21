@@ -13,9 +13,10 @@
 - POST /api/v1/plugins/extensions/desktop_pet/pet/status_report 壳端状态上报（监控用）
 - astrbot_plugin_desktop_pet/page/*                             WebUI 控制页后端
 
-内置长期记忆（pet_memory.py，独立于 LivingMemory）：桌宠会话消息落 chat_log，
-攒满 memory_reflect_rounds 轮后由 LLM 反思抽取记忆条目（档案/事件/心情/约定/观察），
-嵌入模型向量入库；对话时按余弦相似度 + 重要度/时效混合重排召回，经
+内置长期记忆（pet_memory.py，独立于 LivingMemory）：桌宠/私聊/群聊三范围消息落
+chat_log（群聊经被动监听滚动缓冲拼接触发前文），攒满 memory_reflect_rounds 轮后由
+LLM 反思抽取记忆条目（档案/事件/心情/约定/观察），嵌入模型向量入库；对话时按
+余弦相似度 + 重要度/时效混合重排召回（独立开关可隔离范围召回池），经
 extra_user_content_parts 瞬时注入（不落会话历史）。无 embedding provider 时自动降级为
 「重要度+时效」召回，功能不拒用。每日 04:40 维护（衰减/软删/补嵌/桌宠日记）。
 
@@ -38,6 +39,7 @@ from pathlib import Path
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event.filter import CustomFilter
 from astrbot.api.message_components import Plain, Record
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star
@@ -49,6 +51,7 @@ try:  # AstrBot 以包方式加载插件；pytest 平面布局回退为同级导
         MEMORY_SCOPES,
         REFLECT_SYSTEM,
         REFLECT_SYSTEM_GROUP_ADDENDUM,
+        GroupContextBuffer,
         PetMemoryStore,
         blend_score,
         build_diary_prompt,
@@ -67,6 +70,7 @@ except ImportError:
         MEMORY_SCOPES,
         REFLECT_SYSTEM,
         REFLECT_SYSTEM_GROUP_ADDENDUM,
+        GroupContextBuffer,
         PetMemoryStore,
         blend_score,
         build_diary_prompt,
@@ -191,6 +195,7 @@ MEMORY_CONFIG_KEYS = (
     "memory_scope_pet_independent",
     "memory_scope_private_independent",
     "memory_scope_group_independent",
+    "memory_group_context_count",
 )
 
 # 记忆配置里的布尔键（page_memory_config 类型转换用）
@@ -224,14 +229,43 @@ DEFAULT_MEMORY_REFLECT_ROUNDS = 8
 DEFAULT_MEMORY_RECALL_TOP_K = 5
 DEFAULT_MEMORY_RECALL_MIN_SCORE = 0.35
 DEFAULT_MEMORY_RECALL_MAX_CHARS = 800
+DEFAULT_MEMORY_GROUP_CONTEXT_COUNT = 10
+
+# 当前活动插件实例（供被动监听过滤器取缓冲/配置；initialize 置位，terminate 清空）
+_ACTIVE_PLUGIN = None
+
+
+class _GroupContextCaptureFilter(CustomFilter):
+    """被动群消息监听：把群消息推进前文缓冲，永远返回 False 不唤醒消息管线。
+
+    与 LivingMemory 的 PassiveGroupCaptureFilter 同机制：custom_filter 对每个
+    事件求值（无需唤醒），副作用在 filter() 里完成，handler 本体不会执行。
+    """
+
+    def __init__(self, raise_error: bool = True, **kwargs):
+        if not isinstance(raise_error, bool):
+            raise_error = True
+        super().__init__(raise_error=raise_error, **kwargs)
+
+    def filter(self, event: AstrMessageEvent, cfg) -> bool:
+        plugin = _ACTIVE_PLUGIN
+        if plugin is not None:
+            try:
+                plugin._group_context_push(event)
+            except Exception:
+                pass
+        return False
 
 
 class DesktopPetBridge(Star):
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
         self.config = config or {}
+        self._group_ctx = GroupContextBuffer(DEFAULT_MEMORY_GROUP_CONTEXT_COUNT)
 
     async def initialize(self):
+        global _ACTIVE_PLUGIN
+        _ACTIVE_PLUGIN = self
         self._shell_report = None  # 壳端最近一次状态上报 {"at": epoch, ...}
         self._mem_store = None  # 内置记忆存储（PetMemoryStore，_init_memory 填充）
         self._mem_reflect_task = None
@@ -361,6 +395,9 @@ class DesktopPetBridge(Star):
             self._mem_daily_task = asyncio.create_task(self._memory_daily_loop())
 
     async def terminate(self):
+        global _ACTIVE_PLUGIN
+        if _ACTIVE_PLUGIN is self:
+            _ACTIVE_PLUGIN = None
         for attr in ("_gc_task", "_mem_daily_task", "_mem_reflect_task", "_mem_reembed_task"):
             task = getattr(self, attr, None)
             if task:
@@ -985,6 +1022,15 @@ class DesktopPetBridge(Star):
     def _memory_scope_group_enabled(self) -> bool:
         return bool(self.config.get("memory_scope_group_enabled", True))
 
+    def _memory_group_context_count(self) -> int:
+        try:
+            v = self.config.get("memory_group_context_count")
+            if v is None:
+                return DEFAULT_MEMORY_GROUP_CONTEXT_COUNT
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return DEFAULT_MEMORY_GROUP_CONTEXT_COUNT
+
     def _memory_scope_independent(self) -> frozenset:
         """当前被标记为「独立」的范围集合。"""
         return frozenset(
@@ -1118,6 +1164,52 @@ class DesktopPetBridge(Star):
 
     # ---- 捕获钩子：用户消息(+10) / 助手回复(on_llm_response) 落 chat_log ----
 
+    @filter.custom_filter(_GroupContextCaptureFilter, False)
+    async def group_context_passive_capture(self, event: AstrMessageEvent):
+        """被动群消息监听占位：过滤器副作用已入缓冲，本 handler 永不执行。"""
+        return
+
+    def _group_context_push(self, event: AstrMessageEvent) -> None:
+        """被动监听到的群消息入前文缓冲（custom_filter 副作用，绝不抛异常）。"""
+        buf = getattr(self, "_group_ctx", None)
+        if buf is None or self._mem_store is None or not self._memory_enabled():
+            return
+        if not self._memory_scope_group_enabled():
+            return
+        n = self._memory_group_context_count()
+        if n <= 0:
+            return
+        try:
+            mt = event.get_message_type()
+            mtype = getattr(mt, "value", None) or str(mt)
+        except Exception:
+            return
+        if mtype != "GroupMessage":
+            return
+        try:
+            sid = str(event.get_sender_id() or "").strip()
+            self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
+            if self_id and sid and self_id == sid:
+                return  # 自己的发言不进前文（回复已由响应钩子成对落库）
+            gid = str(event.get_group_id() or "").strip()
+            who = str(event.get_sender_name() or "").strip() or sid
+            text = str(event.get_message_str() or "").strip()
+        except Exception:
+            return
+        buf.set_capacity(n)
+        buf.push(gid, who, text)
+
+    def _group_context_prefix(self, event: AstrMessageEvent, who: str, text: str) -> str:
+        """群聊触发消息的前文块（无则空串）。"""
+        buf = getattr(self, "_group_ctx", None)
+        if buf is None:
+            return ""
+        try:
+            gid = str(event.get_group_id() or "").strip()
+        except Exception:
+            return ""
+        return buf.render(gid, trigger_sender=who, trigger_text=text)
+
     @filter.on_llm_request(priority=10)
     async def pet_mem_capture_req(self, event: AstrMessageEvent, req: ProviderRequest):
         if not self._memory_enabled() or self._mem_store is None:
@@ -1139,8 +1231,12 @@ class DesktopPetBridge(Star):
                     who = str(event.get_sender_id() or "").strip()
                 except Exception:
                     who = ""
+            # 拼接前文（被动监听的滚动缓冲），让反思看懂前因后果
+            ctx = self._group_context_prefix(event, who, text)
             if who:
                 text = f"{who}: {text}"
+            if ctx:
+                text = f"{ctx}\n{text}"
         try:
             self._mem_store.log_message("user", text, scope)
         except Exception as e:
@@ -1616,6 +1712,7 @@ class DesktopPetBridge(Star):
                 "memory_scope_group_independent": bool(
                     self.config.get("memory_scope_group_independent", False)
                 ),
+                "memory_group_context_count": self._memory_group_context_count(),
                 "embedding_providers": self._list_embedding_providers(),
                 "llm_providers": [p["id"] for p in self._list_providers()],
             }
@@ -1632,6 +1729,7 @@ class DesktopPetBridge(Star):
                     "memory_reflect_rounds",
                     "memory_recall_top_k",
                     "memory_recall_max_chars",
+                    "memory_group_context_count",
                 ):
                     v = int(v)
                 elif k == "memory_recall_min_score":

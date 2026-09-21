@@ -506,3 +506,118 @@ def test_reflect_groups_by_scope(tmp_path):
     assert scopes == {"主人桌宠日常": "pet", "群里约周五开黑": "group"}
     group_call = [c for c in llm.calls if "群成员" in c["prompt"]]
     assert group_call and "群聊补充规则" in group_call[0]["system_prompt"]
+
+
+# ---------- 群聊前文缓冲（被动监听） ----------
+
+from pet_memory import GroupContextBuffer
+
+
+def test_group_context_buffer_basics():
+    buf = GroupContextBuffer(3)
+    buf.push("g1", "甲", "第一条")
+    buf.push("g1", "乙", "第二条")
+    buf.push("  ", "丙", "空群号丢弃")
+    buf.push("g1", "丙", "")
+    buf.push("g1", "丙", "第三条")
+    buf.push("g1", "丁", "第四条")  # 溢出，挤掉第一条
+    out = buf.render("g1")
+    lines = out.splitlines()
+    assert lines == ["[前文] 乙: 第二条", "[前文] 丙: 第三条", "[前文] 丁: 第四条"]
+    # 群之间隔离
+    buf.push("g2", "甲", "别的群")
+    assert buf.render("g2") == "[前文] 甲: 别的群"
+    assert "别的群" not in buf.render("g1")
+    # 未知群 / 空缓冲
+    assert buf.render("g3") == ""
+
+
+def test_group_context_buffer_render_dedups_trigger():
+    """监听先于捕获入缓冲，render 剔除末尾与触发消息重复的条目。"""
+    buf = GroupContextBuffer(10)
+    buf.push("g1", "甲", "我抽到SSR了")
+    buf.push("g1", "乙", "牛啊")
+    buf.push("g1", "甲", "@恋恋 你看他运气怎么样")
+    # 触发文本是监听文本的子串（@被剥离）→ 剔除
+    out = buf.render("g1", trigger_sender="甲", trigger_text="你看他运气怎么样")
+    assert "你看他运气怎么样" not in out
+    assert "[前文] 甲: 我抽到SSR了" in out
+    assert "[前文] 乙: 牛啊" in out
+    # 发送者不同则不剔除
+    out2 = buf.render("g1", trigger_sender="丙", trigger_text="你看他运气怎么样")
+    assert "你看他运气怎么样" in out2
+    # 无触发信息时不剔除
+    out3 = buf.render("g1")
+    assert "你看他运气怎么样" in out3
+
+
+def test_group_context_buffer_capacity_zero_and_resize():
+    buf = GroupContextBuffer(0)
+    buf.push("g1", "甲", "不入")
+    assert buf.render("g1") == ""
+    buf.set_capacity(2)
+    buf.push("g1", "甲", "一")
+    buf.push("g1", "乙", "二")
+    buf.push("g1", "丙", "三")
+    assert buf.render("g1").splitlines() == ["[前文] 乙: 二", "[前文] 丙: 三"]
+    buf.set_capacity(1)  # 收缩裁剪存量
+    assert buf.render("g1") == "[前文] 丙: 三"
+    buf.set_capacity(0)  # 关闭清空
+    assert buf.render("g1") == ""
+
+
+def _group_event(sender_id="10001", sender_name="群友A", group_id="700542954",
+                 text="hello", self_id="1819987186"):
+    ev = MagicMock()
+    mt = MagicMock()
+    mt.value = "GroupMessage"
+    ev.get_message_type.return_value = mt
+    ev.get_sender_id.return_value = sender_id
+    ev.get_sender_name.return_value = sender_name
+    ev.get_group_id.return_value = group_id
+    ev.get_message_str.return_value = text
+    ev.message_obj = SimpleNamespace(self_id=self_id)
+    return ev
+
+
+def test_group_context_push_filters(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    # 私聊消息不入缓冲
+    ev_friend = MagicMock()
+    mt = MagicMock()
+    mt.value = "FriendMessage"
+    ev_friend.get_message_type.return_value = mt
+    bridge._group_context_push(ev_friend)
+    assert bridge._group_ctx.render("700542954") == ""
+    # 自己的发言不入缓冲
+    bridge._group_context_push(_group_event(sender_id="1819987186", self_id="1819987186"))
+    assert bridge._group_ctx.render("700542954") == ""
+    # 正常群消息入缓冲（昵称缺失回退 QQ 号）
+    bridge._group_context_push(_group_event(sender_name="", text="无昵称消息"))
+    assert "[前文] 10001: 无昵称消息" in bridge._group_ctx.render("700542954")
+    # 群聊记忆开关关 → 不入
+    bridge.config["memory_scope_group_enabled"] = False
+    bridge._group_context_push(_group_event(text="开关关"))
+    assert "开关关" not in bridge._group_ctx.render("700542954")
+    bridge.config["memory_scope_group_enabled"] = True
+    # 前文条数 0 → 不入
+    bridge.config["memory_group_context_count"] = 0
+    bridge._group_context_push(_group_event(text="条数零"))
+    assert "条数零" not in bridge._group_ctx.render("700542954")
+
+
+def test_group_context_prefix_integration(tmp_path):
+    """触发时前文块拼接：含历史、剔除触发消息本身。"""
+    bridge, _ = _make_bridge(tmp_path)
+    bridge._group_context_push(_group_event(text="我抽到SSR了"))
+    bridge._group_context_push(_group_event(sender_id="10002", sender_name="群友B", text="牛啊"))
+    bridge._group_context_push(_group_event(text="恋恋你看他运气怎么样"))  # 触发消息也被监听推入
+    prefix = bridge._group_context_prefix(
+        _group_event(text="恋恋你看他运气怎么样"), "群友A", "你看他运气怎么样"
+    )
+    lines = prefix.splitlines()
+    assert lines == ["[前文] 群友A: 我抽到SSR了", "[前文] 群友B: 牛啊"]
+    # 桌宠/私聊事件无前文（get_group_id 异常兜底）
+    ev_pet = MagicMock()
+    ev_pet.get_group_id.side_effect = RuntimeError("not a group")
+    assert bridge._group_context_prefix(ev_pet, "主人", "hi") == ""

@@ -67,6 +67,61 @@ def scope_of_lm_session(session_id: str, pet_sid: str, master_qq: str):
         return "group"
     return None
 
+
+class GroupContextBuffer:
+    """群聊前文滚动缓冲：每群保留最近 capacity 条消息，供触发 LLM 时拼接落库。
+
+    被动监听（custom_filter 副作用）把群消息 push 进来；触发捕获时 render()
+    渲染成 "[前文] 昵称: 内容" 行块。监听先于捕获执行，故 render 会剔除末尾
+    与触发消息重复的条目。纯内存，不落盘、不进 chat_log 独立行。
+    """
+
+    def __init__(self, capacity: int = 10):
+        self._capacity = max(0, int(capacity))
+        self._bufs: dict[str, list] = {}
+
+    def set_capacity(self, capacity: int) -> None:
+        self._capacity = max(0, int(capacity))
+        if self._capacity <= 0:
+            self._bufs.clear()
+            return
+        for buf in self._bufs.values():
+            if len(buf) > self._capacity:
+                del buf[: len(buf) - self._capacity]
+
+    def push(self, group_key: str, sender: str, text: str) -> None:
+        if self._capacity <= 0:
+            return
+        group_key = str(group_key or "").strip()
+        sender = str(sender or "").strip()
+        text = str(text or "").strip()
+        if not group_key or not text:
+            return
+        buf = self._bufs.setdefault(group_key, [])
+        buf.append((sender, text))
+        if len(buf) > self._capacity:
+            del buf[: len(buf) - self._capacity]
+
+    def render(
+        self, group_key: str, trigger_sender: str = "", trigger_text: str = ""
+    ) -> str:
+        """渲染前文块；剔除末尾与触发消息重复的条目（无前文返回空串）。"""
+        buf = self._bufs.get(str(group_key or "").strip())
+        if not buf:
+            return ""
+        items = list(buf)
+        trigger_sender = str(trigger_sender or "").strip()
+        trigger_text = str(trigger_text or "").strip()
+        if items and trigger_text:
+            last_sender, last_text = items[-1]
+            if last_sender == trigger_sender and (
+                last_text == trigger_text
+                or last_text in trigger_text
+                or trigger_text in last_text
+            ):
+                items.pop()
+        return "\n".join(f"[前文] {sender}: {text}" for sender, text in items)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -106,7 +106,11 @@
         </label>
         <label class="row checkbox-row">
           <input type="checkbox" id="memory-scope-group-enabled" />
-          <span>覆盖群聊（仅捕获触发 LLM 的群消息）</span>
+          <span>覆盖群聊（触发 LLM 的群消息，可附滚动前文）</span>
+        </label>
+        <label class="row">
+          <span class="label">群聊前文条数</span>
+          <input type="text" id="memory-group-context-count" spellcheck="false" title="触发时把该群最近 N 条消息作为前文一起落库，0=关闭" />
         </label>
         <label class="row checkbox-row">
           <input type="checkbox" id="memory-scope-pet-independent" />

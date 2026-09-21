@@ -26,3 +26,15 @@ def pytest_configure():
     sys.modules['astrbot.api.web'].error_response = MagicMock()
     sys.modules['astrbot.api.web'].request = MagicMock()
     sys.modules['astrbot.api'].logger = MagicMock()
+
+    # main.py 从 astrbot.api.event.filter 导入 CustomFilter 作为基类，
+    # 必须是真实类（MagicMock 实例不能被继承）
+    import types
+    event_filter_mod = types.ModuleType('astrbot.api.event.filter')
+
+    class MockCustomFilter:
+        def __init__(self, raise_error=True, **kwargs):
+            self.raise_error = raise_error
+
+    event_filter_mod.CustomFilter = MockCustomFilter
+    sys.modules['astrbot.api.event.filter'] = event_filter_mod
