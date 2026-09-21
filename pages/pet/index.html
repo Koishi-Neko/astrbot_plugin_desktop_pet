@@ -7,315 +7,386 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div class="page">
-      <h1>桌宠控制页</h1>
+    <div class="layout">
+      <nav class="sidebar" aria-label="控制页标签">
+        <div class="brand"><span class="brand-dot"></span><span class="tab-label">桌宠控制</span></div>
+        <button class="tab active" data-tab="overview"><span class="dot"></span><span class="tab-label">总览</span></button>
+        <button class="tab" data-tab="identity"><span class="dot"></span><span class="tab-label">身份与人格</span></button>
+        <button class="tab" data-tab="voice"><span class="dot"></span><span class="tab-label">语音</span></button>
+        <button class="tab" data-tab="memory"><span class="dot"></span><span class="tab-label">记忆</span></button>
+        <button class="tab" data-tab="proactive"><span class="dot"></span><span class="tab-label">主动对话</span></button>
+      </nav>
 
-      <section class="card">
-        <div class="card-title">
-          状态
-          <button id="btn-refresh" class="btn small">刷新</button>
-        </div>
-        <div id="status-box" class="kv">加载中…</div>
-      </section>
+      <main class="content">
+        <!-- ============ 总览 ============ -->
+        <section class="panel" id="panel-overview" aria-label="总览">
+          <h2 class="panel-title">总览 <button id="btn-refresh" class="btn small">刷新</button></h2>
+          <div id="status-lamps" class="lamp-grid"></div>
 
-      <section class="card">
-        <div class="card-title">Token 消耗统计 (provider_stats)</div>
-        <div id="token-stats-box" class="kv">加载中…</div>
-      </section>
+          <section class="card">
+            <h3 class="card-title">Token 消耗统计（provider_stats）</h3>
+            <div id="token-stats-box" class="kv">加载中…</div>
+          </section>
 
-      <section class="card">
-        <div class="card-title">主人身份</div>
-        <div class="warn">桌宠会话与 QQ 群聊中该账号的消息会被识别为同一位主人。</div>
-        <label class="row">
-          <span class="label">主人昵称</span>
-          <input type="text" id="master-name" placeholder="留空则称呼为「主人」" />
-        </label>
-        <label class="row">
-          <span class="label">主人 QQ 号</span>
-          <input type="text" id="master-qq" placeholder="QQ 侧身份标注用，可留空" spellcheck="false" />
-        </label>
-        <div class="row buttons">
-          <button id="btn-save-master" class="btn primary">保存身份</button>
-          <span id="master-save-msg" class="msg"></span>
-        </div>
-      </section>
+          <section class="card">
+            <h3 class="card-title">插件信息</h3>
+            <div id="plugin-info" class="kv">加载中…</div>
+          </section>
+        </section>
 
-      <section class="card">
-        <div class="card-title">桌宠人格</div>
-        <div class="warn">直接给桌宠会话选择人格，无需打开隐藏的 /chat 页。桌宠尚未发言时会话不存在，需先发一条消息再来设置。</div>
-        <label class="row">
-          <span class="label">人格</span>
-          <select id="pet-persona"></select>
-        </label>
-        <div id="persona-hint" class="warn"></div>
-        <div class="row buttons">
-          <button id="btn-save-persona" class="btn primary">保存人格</button>
-          <span id="persona-save-msg" class="msg"></span>
-        </div>
-      </section>
+        <!-- ============ 身份与人格 ============ -->
+        <section class="panel hidden" id="panel-identity" aria-label="身份与人格">
+          <h2 class="panel-title">身份与人格</h2>
 
-      <section class="card">
-        <div class="card-title">QQ 日语配音</div>
-        <div class="warn">开启后，bot 在全部 QQ 群聊/私聊的回复附带一条日语配音语音（文字仍为中文）。语音服务离线时自动降级为纯文字。</div>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="qq-jp-dub" />
-          <span>启用 QQ 会话日语配音</span>
-        </label>
-        <div class="row buttons">
-          <button id="btn-save-dub" class="btn primary">保存开关</button>
-          <span id="dub-save-msg" class="msg"></span>
-        </div>
-      </section>
+          <section class="card">
+            <h3 class="card-title">主人身份</h3>
+            <div class="warn">桌宠会话与 QQ 群聊中该账号的消息会被识别为同一位主人。</div>
+            <label class="row">
+              <span class="label">主人昵称</span>
+              <input type="text" id="master-name" placeholder="留空则称呼为「主人」" />
+            </label>
+            <label class="row">
+              <span class="label">主人 QQ 号</span>
+              <input type="text" id="master-qq" placeholder="QQ 侧身份标注用，可留空" spellcheck="false" />
+            </label>
+            <div class="row buttons">
+              <button id="btn-save-master" class="btn primary">保存身份</button>
+              <span id="master-save-msg" class="msg"></span>
+            </div>
+          </section>
 
-      <section class="card">
-        <div class="card-title">语音输入</div>
-        <div class="warn">桌宠输入栏的麦克风按钮（本地 ASR 服务，whisper @ NPU）。开关与地址由壳端远程拉取，约 2 分钟内生效；运行状态来自桌宠心跳上报。</div>
-        <div id="asr-state" class="kv">加载中…</div>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="voice-input-enabled" />
-          <span>启用语音输入</span>
-        </label>
-        <label class="row">
-          <span class="label">识别服务地址</span>
-          <input type="text" id="asr-url" placeholder="http://127.0.0.1:15055" spellcheck="false" />
-        </label>
-        <div class="row buttons">
-          <button id="btn-save-asr" class="btn primary">保存配置</button>
-          <span id="asr-save-msg" class="msg"></span>
-        </div>
-      </section>
+          <section class="card">
+            <h3 class="card-title">桌宠人格</h3>
+            <div class="warn">直接给桌宠会话选择人格，无需打开隐藏的 /chat 页。桌宠尚未发言时会话不存在，需先发一条消息再来设置。</div>
+            <label class="row">
+              <span class="label">人格</span>
+              <select id="pet-persona"></select>
+            </label>
+            <div id="persona-hint" class="warn"></div>
+            <div class="row buttons">
+              <button id="btn-save-persona" class="btn primary">保存人格</button>
+              <span id="persona-save-msg" class="msg"></span>
+            </div>
+          </section>
 
-      <section class="card">
-        <div class="card-title">
-          内置记忆
-          <button id="btn-memory-refresh" class="btn small">刷新</button>
-        </div>
-        <div class="warn">插件自带长期记忆（向量召回 + LLM 反思），完全自包含。覆盖桌宠/主人私聊/群聊三个范围，默认全混合；某范围设为「独立」后，它的记忆只在该范围召回。无嵌入模型时自动降级为重要度+时效召回。</div>
-        <div id="memory-state" class="kv">加载中…</div>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-enabled" />
-          <span>启用内置长期记忆</span>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-diary-enabled" />
-          <span>每日桌宠日记（凌晨按昨日对话生成一条日记记忆）</span>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-scope-private-enabled" />
-          <span>覆盖主人私聊（QQ 私聊也产生/召回记忆）</span>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-scope-group-enabled" />
-          <span>覆盖群聊（触发 LLM 的群消息，可附滚动前文）</span>
-        </label>
-        <label class="row">
-          <span class="label">群聊前文条数</span>
-          <input type="text" id="memory-group-context-count" spellcheck="false" title="触发时把该群最近 N 条消息作为前文一起落库，0=关闭" />
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-scope-pet-independent" />
-          <span>桌宠记忆独立</span>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-scope-private-independent" />
-          <span>私聊记忆独立</span>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="memory-scope-group-independent" />
-          <span>群聊记忆独立（不想让群友感知到私聊记忆就开这个）</span>
-        </label>
-        <label class="row">
-          <span class="label">嵌入模型 provider</span>
-          <input type="text" id="memory-embed-provider" list="memory-embed-list" placeholder="留空则自动取首个可用" spellcheck="false" />
-          <datalist id="memory-embed-list"></datalist>
-        </label>
-        <label class="row">
-          <span class="label">反思 LLM provider</span>
-          <input type="text" id="memory-llm-provider" list="memory-llm-list" placeholder="留空则跟随会话当前模型" spellcheck="false" />
-          <datalist id="memory-llm-list"></datalist>
-        </label>
-        <label class="row">
-          <span class="label">反思触发轮数</span>
-          <input type="text" id="memory-reflect-rounds" spellcheck="false" />
-        </label>
-        <label class="row">
-          <span class="label">召回条数 top_k</span>
-          <input type="text" id="memory-recall-topk" spellcheck="false" />
-        </label>
-        <label class="row">
-          <span class="label">召回最低相似度</span>
-          <input type="text" id="memory-recall-minscore" spellcheck="false" />
-        </label>
-        <label class="row">
-          <span class="label">注入长度预算(字)</span>
-          <input type="text" id="memory-recall-maxchars" spellcheck="false" />
-        </label>
-        <div class="row buttons">
-          <button id="btn-save-memory" class="btn primary">保存配置</button>
-          <span id="memory-save-msg" class="msg"></span>
-        </div>
-        <div class="row buttons">
-          <button id="btn-memory-import" class="btn">从 LivingMemory 全量迁移</button>
-          <button id="btn-memory-reflect" class="btn">立即反思</button>
-          <button id="btn-memory-reembed" class="btn">重建向量</button>
-          <span id="memory-op-msg" class="msg"></span>
-        </div>
-        <label class="row">
-          <span class="label">召回测试</span>
-          <input type="text" id="memory-test-text" placeholder="输入一句话，看实际会注入哪些记忆" />
-          <select id="memory-test-scope">
-            <option value="pet" selected>桌宠</option>
-            <option value="private">私聊</option>
-            <option value="group">群聊</option>
-          </select>
-        </label>
-        <div class="row buttons">
-          <button id="btn-memory-test" class="btn">测试召回</button>
-        </div>
-        <div id="memory-test-result" class="kv hidden"></div>
-        <label class="row">
-          <span class="label">浏览 / 搜索</span>
-          <input type="text" id="memory-search" placeholder="按内容子串过滤，留空列全部" />
-          <select id="memory-filter-scope">
-            <option value="" selected>全部范围</option>
-            <option value="pet">桌宠</option>
-            <option value="private">私聊</option>
-            <option value="group">群聊</option>
-          </select>
-        </label>
-        <div class="row buttons">
-          <button id="btn-memory-search" class="btn">查询</button>
-          <button id="btn-memory-prev" class="btn small">上一页</button>
-          <button id="btn-memory-next" class="btn small">下一页</button>
-          <span id="memory-page-info" class="msg"></span>
-        </div>
-        <div id="memory-list" class="kv">（空）</div>
-        <label class="row">
-          <span class="label">手动添加</span>
-          <input type="text" id="memory-add-content" placeholder="想让桌宠记住的事，如：主人不喝碳酸饮料" />
-        </label>
-        <label class="row">
-          <span class="label">类别 / 重要度</span>
-          <select id="memory-add-kind">
-            <option value="profile">档案</option>
-            <option value="fact" selected>事实</option>
-            <option value="event">事件</option>
-            <option value="mood">心情</option>
-            <option value="promise">约定</option>
-            <option value="scene">观察</option>
-          </select>
-          <select id="memory-add-importance">
-            <option value="1">1 琐事</option>
-            <option value="2">2</option>
-            <option value="3" selected>3 普通</option>
-            <option value="4">4</option>
-            <option value="5">5 极重要</option>
-          </select>
-          <select id="memory-add-scope">
-            <option value="pet" selected>桌宠</option>
-            <option value="private">私聊</option>
-            <option value="group">群聊</option>
-          </select>
-          <button id="btn-memory-add" class="btn">添加</button>
-          <span id="memory-add-msg" class="msg"></span>
-        </label>
-      </section>
+          <section class="card">
+            <h3 class="card-title">QQ 日语配音</h3>
+            <div class="warn">开启后，bot 在全部 QQ 群聊/私聊的回复附带一条日语配音语音（文字仍为中文）。语音服务离线时自动降级为纯文字。</div>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="qq-jp-dub" />
+              <span>启用 QQ 会话日语配音</span>
+            </label>
+            <div class="row buttons">
+              <button id="btn-save-dub" class="btn primary">保存开关</button>
+              <span id="dub-save-msg" class="msg"></span>
+            </div>
+          </section>
+        </section>
 
-      <section class="card">
-        <div class="card-title">主动对话 / 桌面感知动态</div>
-        <div id="pet-report" class="kv">加载中…</div>
-      </section>
+        <!-- ============ 语音 ============ -->
+        <section class="panel hidden" id="panel-voice" aria-label="语音">
+          <h2 class="panel-title">语音</h2>
 
-      <section class="card">
-        <div class="card-title">主动对话 / 桌面感知配置</div>
-        <div class="warn">壳端远程拉取（约 2 分钟内生效）。桌面感知开启后，桌宠按观察间隔抓取前台窗口截图发给视觉模型识图搭话，截图会发送给 LLM 提供商。</div>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="proactive-enabled" />
-          <span>启用主动对话（深夜催睡 / 回来问候 / 久坐提醒）</span>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="scene-enabled" />
-          <span>启用桌面感知（看屏幕主动搭话）</span>
-        </label>
-        <label class="row">
-          <span class="label">观察间隔</span>
-          <select id="scene-interval">
-            <option value="10">10 分钟</option>
-            <option value="15">15 分钟</option>
-            <option value="30">30 分钟</option>
-            <option value="60">60 分钟</option>
-          </select>
-        </label>
-        <label class="row">
-          <span class="label">视觉模型</span>
-          <input type="text" id="scene-provider" list="provider-list" placeholder="留空则跟随会话默认模型" spellcheck="false" />
-          <datalist id="provider-list"></datalist>
-        </label>
-        <div id="scene-provider-hint" class="warn"></div>
-        <label class="row">
-          <span class="label">禁止抓取进程</span>
-          <textarea id="scene-blocklist" rows="3" spellcheck="false" placeholder="逗号分隔的小写进程名；名单内进程在前台时不截图"></textarea>
-        </label>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="intent-perceive-enabled" />
-          <span>启用指令感知（打字/语音说「看看我的屏幕」即带截图提问）</span>
-        </label>
-        <label class="row">
-          <span class="label">感知指令关键词</span>
-          <textarea id="intent-perceive-keywords" rows="4" spellcheck="false" placeholder="一行一个子串，命中即触发截图；含「别看/不要看」等否定词时不触发。清空保存则恢复默认"></textarea>
-        </label>
-        <div class="row buttons">
-          <button id="btn-save-scene" class="btn primary">保存配置</button>
-          <span id="scene-save-msg" class="msg"></span>
-        </div>
-      </section>
+          <section class="card">
+            <h3 class="card-title">TTS 语音配置</h3>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="tts-enabled" />
+              <span>启用语音合成（桌宠回复附带日语配音）</span>
+            </label>
+            <label class="row">
+              <span class="label">SBV2 服务地址</span>
+              <input type="text" id="tts-base-url" placeholder="http://172.18.0.1:5000" spellcheck="false" />
+            </label>
+            <label class="row">
+              <span class="label">模型</span>
+              <select id="tts-model"></select>
+            </label>
+            <label class="row">
+              <span class="label">说话人</span>
+              <select id="tts-speaker"></select>
+            </label>
+            <label class="row">
+              <span class="label">风格</span>
+              <select id="tts-style"></select>
+            </label>
+            <label class="row">
+              <span class="label">语速（length，越大越慢）</span>
+              <input type="range" id="tts-length" min="0.5" max="2" step="0.05" />
+              <span id="tts-length-val" class="mono">1.00</span>
+            </label>
+            <div id="models-error" class="warn"></div>
+            <div class="row buttons">
+              <button id="btn-save" class="btn primary">保存配置</button>
+              <span id="save-msg" class="msg"></span>
+            </div>
+          </section>
 
-      <section class="card">
-        <div class="card-title">TTS 语音配置</div>
-        <label class="row checkbox-row">
-          <input type="checkbox" id="tts-enabled" />
-          <span>启用语音合成（桌宠回复附带日语配音）</span>
-        </label>
-        <label class="row">
-          <span class="label">SBV2 服务地址</span>
-          <input type="text" id="tts-base-url" placeholder="http://172.18.0.1:5000" spellcheck="false" />
-        </label>
-        <label class="row">
-          <span class="label">模型</span>
-          <select id="tts-model"></select>
-        </label>
-        <label class="row">
-          <span class="label">说话人</span>
-          <select id="tts-speaker"></select>
-        </label>
-        <label class="row">
-          <span class="label">风格</span>
-          <select id="tts-style"></select>
-        </label>
-        <label class="row">
-          <span class="label">语速（length，越大越慢）</span>
-          <input type="range" id="tts-length" min="0.5" max="2" step="0.05" />
-          <span id="tts-length-val" class="mono">1.00</span>
-        </label>
-        <div id="models-error" class="warn"></div>
-        <div class="row buttons">
-          <button id="btn-save" class="btn primary">保存配置</button>
-          <span id="save-msg" class="msg"></span>
-        </div>
-      </section>
+          <section class="card">
+            <h3 class="card-title">试听（用当前选中的参数合成，不保存）</h3>
+            <label class="row">
+              <span class="label">日语文本</span>
+              <input type="text" id="test-text" value="こんにちは！今日も一緒に頑張りましょう！" />
+            </label>
+            <div class="row buttons">
+              <button id="btn-test" class="btn">合成并播放</button>
+              <span id="test-msg" class="msg"></span>
+            </div>
+            <canvas id="wave-canvas" class="hidden"></canvas>
+            <audio id="test-audio" controls class="hidden"></audio>
+          </section>
 
-      <section class="card">
-        <div class="card-title">试听（用当前选中的参数合成，不保存）</div>
-        <label class="row">
-          <span class="label">日语文本</span>
-          <input type="text" id="test-text" value="こんにちは！今日も一緒に頑張りましょう！" />
-        </label>
-        <div class="row buttons">
-          <button id="btn-test" class="btn">合成并播放</button>
-          <span id="test-msg" class="msg"></span>
-        </div>
-        <audio id="test-audio" controls class="hidden"></audio>
-      </section>
+          <section class="card">
+            <h3 class="card-title">语音输入</h3>
+            <div class="warn">桌宠输入栏的麦克风按钮（本地 ASR 服务，whisper @ NPU）。开关与地址由壳端远程拉取，约 2 分钟内生效；运行状态来自桌宠心跳上报。</div>
+            <div id="asr-state" class="kv">加载中…</div>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="voice-input-enabled" />
+              <span>启用语音输入</span>
+            </label>
+            <label class="row">
+              <span class="label">识别服务地址</span>
+              <input type="text" id="asr-url" placeholder="http://127.0.0.1:15055" spellcheck="false" />
+            </label>
+            <div class="row buttons">
+              <button id="btn-save-asr" class="btn primary">保存配置</button>
+              <span id="asr-save-msg" class="msg"></span>
+            </div>
+          </section>
+        </section>
+
+        <!-- ============ 记忆 ============ -->
+        <section class="panel hidden" id="panel-memory" aria-label="记忆">
+          <h2 class="panel-title">记忆 <button id="btn-memory-refresh" class="btn small">刷新</button></h2>
+
+          <section class="card">
+            <h3 class="card-title">状态与配置</h3>
+            <div class="warn">插件自带长期记忆（向量召回 + LLM 反思），完全自包含。覆盖桌宠/主人私聊/群聊三个范围，默认全混合；某范围设为「独立」后，它的记忆只在该范围召回。无嵌入模型时自动降级为重要度+时效召回。</div>
+            <div id="memory-state" class="kv">加载中…</div>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-enabled" />
+              <span>启用内置长期记忆</span>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-diary-enabled" />
+              <span>每日桌宠日记（凌晨按昨日对话生成一条日记记忆）</span>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-scope-private-enabled" />
+              <span>覆盖主人私聊（QQ 私聊也产生/召回记忆）</span>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-scope-group-enabled" />
+              <span>覆盖群聊（触发 LLM 的群消息，可附滚动前文）</span>
+            </label>
+            <label class="row">
+              <span class="label">群聊前文条数</span>
+              <input type="text" id="memory-group-context-count" spellcheck="false" title="触发时把该群最近 N 条消息作为前文一起落库，0=关闭" />
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-scope-pet-independent" />
+              <span>桌宠记忆独立</span>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-scope-private-independent" />
+              <span>私聊记忆独立</span>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="memory-scope-group-independent" />
+              <span>群聊记忆独立（不想让群友感知到私聊记忆就开这个）</span>
+            </label>
+            <label class="row">
+              <span class="label">嵌入模型 provider</span>
+              <input type="text" id="memory-embed-provider" list="memory-embed-list" placeholder="留空则自动取首个可用" spellcheck="false" />
+              <datalist id="memory-embed-list"></datalist>
+            </label>
+            <label class="row">
+              <span class="label">反思 LLM provider</span>
+              <input type="text" id="memory-llm-provider" list="memory-llm-list" placeholder="留空则跟随会话当前模型" spellcheck="false" />
+              <datalist id="memory-llm-list"></datalist>
+            </label>
+            <label class="row">
+              <span class="label">批量条数</span>
+              <input type="text" id="memory-reflect-batch" spellcheck="false" title="每个范围攒满 N 条消息触发一次反思" />
+              <span class="hint">每范围攒满 N 条消息触发一次反思</span>
+            </label>
+            <label class="row">
+              <span class="label">召回条数 top_k</span>
+              <input type="text" id="memory-recall-topk" spellcheck="false" />
+            </label>
+            <label class="row">
+              <span class="label">召回最低相似度</span>
+              <input type="text" id="memory-recall-minscore" spellcheck="false" />
+            </label>
+            <label class="row">
+              <span class="label">注入长度预算(字)</span>
+              <input type="text" id="memory-recall-maxchars" spellcheck="false" />
+            </label>
+            <div class="row buttons">
+              <button id="btn-save-memory" class="btn primary">保存配置</button>
+              <span id="memory-save-msg" class="msg"></span>
+            </div>
+            <div class="row buttons">
+              <button id="btn-memory-import" class="btn">从 LivingMemory 全量迁移</button>
+              <button id="btn-memory-reflect" class="btn">立即反思</button>
+              <button id="btn-memory-reembed" class="btn">重建向量</button>
+              <span id="memory-op-msg" class="msg"></span>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3 class="card-title">记忆图谱 <button id="btn-graph-reload" class="btn small">重新加载</button></h3>
+            <div id="graph-hint" class="warn hidden"></div>
+            <div class="graph-wrap">
+              <canvas id="memory-graph"></canvas>
+              <div id="graph-tooltip" class="hidden"></div>
+            </div>
+            <div class="graph-legend">
+              <span><i class="dot" style="background: var(--graph-pet)"></i>桌宠</span>
+              <span><i class="dot" style="background: var(--graph-private)"></i>私聊</span>
+              <span><i class="dot" style="background: var(--graph-group)"></i>群聊</span>
+              <span class="msg">节点大小随重要度（1–5）递增，可拖拽调整位置，悬停查看内容</span>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3 class="card-title">分布</h3>
+            <div class="dist-group">
+              <div class="dist-title">按类别</div>
+              <div id="mem-dist-kind"></div>
+            </div>
+            <div class="dist-group">
+              <div class="dist-title">按范围</div>
+              <div id="mem-dist-scope"></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3 class="card-title">召回测试</h3>
+            <label class="row">
+              <span class="label">召回测试</span>
+              <input type="text" id="memory-test-text" placeholder="输入一句话，看实际会注入哪些记忆" />
+              <select id="memory-test-scope">
+                <option value="pet" selected>桌宠</option>
+                <option value="private">私聊</option>
+                <option value="group">群聊</option>
+              </select>
+            </label>
+            <div class="row buttons">
+              <button id="btn-memory-test" class="btn">测试召回</button>
+            </div>
+            <div id="memory-test-result" class="kv hidden"></div>
+          </section>
+
+          <section class="card">
+            <h3 class="card-title">浏览 / 搜索</h3>
+            <label class="row">
+              <span class="label">浏览 / 搜索</span>
+              <input type="text" id="memory-search" placeholder="按内容子串过滤，留空列全部" />
+              <select id="memory-filter-scope">
+                <option value="" selected>全部范围</option>
+                <option value="pet">桌宠</option>
+                <option value="private">私聊</option>
+                <option value="group">群聊</option>
+              </select>
+            </label>
+            <div class="row buttons">
+              <button id="btn-memory-search" class="btn">查询</button>
+              <button id="btn-memory-prev" class="btn small">上一页</button>
+              <button id="btn-memory-next" class="btn small">下一页</button>
+              <span id="memory-page-info" class="msg"></span>
+            </div>
+            <div id="memory-list" class="kv">（空）</div>
+          </section>
+
+          <section class="card">
+            <h3 class="card-title">手动添加</h3>
+            <label class="row">
+              <span class="label">手动添加</span>
+              <input type="text" id="memory-add-content" placeholder="想让桌宠记住的事，如：主人不喝碳酸饮料" />
+            </label>
+            <label class="row">
+              <span class="label">类别 / 重要度</span>
+              <select id="memory-add-kind">
+                <option value="profile">档案</option>
+                <option value="fact" selected>事实</option>
+                <option value="event">事件</option>
+                <option value="mood">心情</option>
+                <option value="promise">约定</option>
+                <option value="scene">观察</option>
+              </select>
+              <select id="memory-add-importance">
+                <option value="1">1 琐事</option>
+                <option value="2">2</option>
+                <option value="3" selected>3 普通</option>
+                <option value="4">4</option>
+                <option value="5">5 极重要</option>
+              </select>
+              <select id="memory-add-scope">
+                <option value="pet" selected>桌宠</option>
+                <option value="private">私聊</option>
+                <option value="group">群聊</option>
+              </select>
+              <button id="btn-memory-add" class="btn">添加</button>
+              <span id="memory-add-msg" class="msg"></span>
+            </label>
+          </section>
+        </section>
+
+        <!-- ============ 主动对话 ============ -->
+        <section class="panel hidden" id="panel-proactive" aria-label="主动对话">
+          <h2 class="panel-title">主动对话</h2>
+
+          <section class="card">
+            <h3 class="card-title">感知配置</h3>
+            <div class="warn">壳端远程拉取（约 2 分钟内生效）。桌面感知开启后，桌宠按观察间隔抓取前台窗口截图发给视觉模型识图搭话，截图会发送给 LLM 提供商。</div>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="proactive-enabled" />
+              <span>启用主动对话（深夜催睡 / 回来问候 / 久坐提醒）</span>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="scene-enabled" />
+              <span>启用桌面感知（看屏幕主动搭话）</span>
+            </label>
+            <label class="row">
+              <span class="label">观察间隔</span>
+              <select id="scene-interval">
+                <option value="10">10 分钟</option>
+                <option value="15">15 分钟</option>
+                <option value="30">30 分钟</option>
+                <option value="60">60 分钟</option>
+              </select>
+            </label>
+            <label class="row">
+              <span class="label">视觉模型</span>
+              <input type="text" id="scene-provider" list="provider-list" placeholder="留空则跟随会话默认模型" spellcheck="false" />
+              <datalist id="provider-list"></datalist>
+            </label>
+            <div id="scene-provider-hint" class="warn"></div>
+            <label class="row">
+              <span class="label">禁止抓取进程</span>
+              <textarea id="scene-blocklist" rows="3" spellcheck="false" placeholder="逗号分隔的小写进程名；名单内进程在前台时不截图"></textarea>
+            </label>
+            <label class="row checkbox-row">
+              <input type="checkbox" id="intent-perceive-enabled" />
+              <span>启用指令感知（打字/语音说「看看我的屏幕」即带截图提问）</span>
+            </label>
+            <label class="row">
+              <span class="label">感知指令关键词</span>
+              <textarea id="intent-perceive-keywords" rows="4" spellcheck="false" placeholder="一行一个子串，命中即触发截图；含「别看/不要看」等否定词时不触发。清空保存则恢复默认"></textarea>
+            </label>
+            <div class="row buttons">
+              <button id="btn-save-scene" class="btn primary">保存配置</button>
+              <span id="scene-save-msg" class="msg"></span>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3 class="card-title">动态流水</h3>
+            <div id="pet-report" class="kv">加载中…</div>
+            <div id="proactive-events" class="event-list"></div>
+          </section>
+        </section>
+      </main>
     </div>
     <script type="module" src="./app.js"></script>
   </body>
