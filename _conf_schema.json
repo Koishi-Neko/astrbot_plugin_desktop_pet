@@ -186,5 +186,40 @@
         "type": "bool",
         "default": true,
         "invisible": true
+    },
+    "memory_scope_private_enabled": {
+        "description": "记忆覆盖主人私聊",
+        "hint": "开启后捕获并召回主人 QQ 私聊的记忆。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+    },
+    "memory_scope_group_enabled": {
+        "description": "记忆覆盖群聊",
+        "hint": "开启后捕获并召回群聊（触发 LLM 的消息）的记忆。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+    },
+    "memory_scope_pet_independent": {
+        "description": "桌宠记忆独立",
+        "hint": "开启后桌宠会话只产生/召回桌宠自己的记忆，不与私聊/群聊混合。",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+    },
+    "memory_scope_private_independent": {
+        "description": "私聊记忆独立",
+        "hint": "开启后私聊只产生/召回私聊自己的记忆，不与桌宠/群聊混合。",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+    },
+    "memory_scope_group_independent": {
+        "description": "群聊记忆独立",
+        "hint": "开启后群聊只产生/召回群聊自己的记忆，不与桌宠/私聊混合。",
+        "type": "bool",
+        "default": false,
+        "invisible": true
     }
 }

@@ -90,7 +90,7 @@
           内置记忆
           <button id="btn-memory-refresh" class="btn small">刷新</button>
         </div>
-        <div class="warn">桌宠会话的插件自带长期记忆（向量召回 + LLM 反思），不依赖 LivingMemory。无嵌入模型时自动降级为重要度+时效召回。</div>
+        <div class="warn">插件自带长期记忆（向量召回 + LLM 反思），完全自包含。覆盖桌宠/主人私聊/群聊三个范围，默认全混合；某范围设为「独立」后，它的记忆只在该范围召回。无嵌入模型时自动降级为重要度+时效召回。</div>
         <div id="memory-state" class="kv">加载中…</div>
         <label class="row checkbox-row">
           <input type="checkbox" id="memory-enabled" />
@@ -99,6 +99,26 @@
         <label class="row checkbox-row">
           <input type="checkbox" id="memory-diary-enabled" />
           <span>每日桌宠日记（凌晨按昨日对话生成一条日记记忆）</span>
+        </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-scope-private-enabled" />
+          <span>覆盖主人私聊（QQ 私聊也产生/召回记忆）</span>
+        </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-scope-group-enabled" />
+          <span>覆盖群聊（仅捕获触发 LLM 的群消息）</span>
+        </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-scope-pet-independent" />
+          <span>桌宠记忆独立</span>
+        </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-scope-private-independent" />
+          <span>私聊记忆独立</span>
+        </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-scope-group-independent" />
+          <span>群聊记忆独立（不想让群友感知到私聊记忆就开这个）</span>
         </label>
         <label class="row">
           <span class="label">嵌入模型 provider</span>
@@ -131,7 +151,7 @@
           <span id="memory-save-msg" class="msg"></span>
         </div>
         <div class="row buttons">
-          <button id="btn-memory-import" class="btn">从 LivingMemory 导入</button>
+          <button id="btn-memory-import" class="btn">从 LivingMemory 全量迁移</button>
           <button id="btn-memory-reflect" class="btn">立即反思</button>
           <button id="btn-memory-reembed" class="btn">重建向量</button>
           <span id="memory-op-msg" class="msg"></span>
@@ -139,6 +159,11 @@
         <label class="row">
           <span class="label">召回测试</span>
           <input type="text" id="memory-test-text" placeholder="输入一句话，看实际会注入哪些记忆" />
+          <select id="memory-test-scope">
+            <option value="pet" selected>桌宠</option>
+            <option value="private">私聊</option>
+            <option value="group">群聊</option>
+          </select>
         </label>
         <div class="row buttons">
           <button id="btn-memory-test" class="btn">测试召回</button>
@@ -147,6 +172,12 @@
         <label class="row">
           <span class="label">浏览 / 搜索</span>
           <input type="text" id="memory-search" placeholder="按内容子串过滤，留空列全部" />
+          <select id="memory-filter-scope">
+            <option value="" selected>全部范围</option>
+            <option value="pet">桌宠</option>
+            <option value="private">私聊</option>
+            <option value="group">群聊</option>
+          </select>
         </label>
         <div class="row buttons">
           <button id="btn-memory-search" class="btn">查询</button>
@@ -175,6 +206,11 @@
             <option value="3" selected>3 普通</option>
             <option value="4">4</option>
             <option value="5">5 极重要</option>
+          </select>
+          <select id="memory-add-scope">
+            <option value="pet" selected>桌宠</option>
+            <option value="private">私聊</option>
+            <option value="group">群聊</option>
           </select>
           <button id="btn-memory-add" class="btn">添加</button>
           <span id="memory-add-msg" class="msg"></span>

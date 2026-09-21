@@ -46,7 +46,9 @@ from starlette.responses import JSONResponse
 
 try:  # AstrBot 以包方式加载插件；pytest 平面布局回退为同级导入
     from .pet_memory import (
+        MEMORY_SCOPES,
         REFLECT_SYSTEM,
+        REFLECT_SYSTEM_GROUP_ADDENDUM,
         PetMemoryStore,
         blend_score,
         build_diary_prompt,
@@ -57,11 +59,14 @@ try:  # AstrBot 以包方式加载插件；pytest 平面布局回退为同级导
         now_str,
         parse_dt,
         parse_memories_json,
+        pool_scopes,
         strip_leading_tags,
     )
 except ImportError:
     from pet_memory import (
+        MEMORY_SCOPES,
         REFLECT_SYSTEM,
+        REFLECT_SYSTEM_GROUP_ADDENDUM,
         PetMemoryStore,
         blend_score,
         build_diary_prompt,
@@ -72,6 +77,7 @@ except ImportError:
         now_str,
         parse_dt,
         parse_memories_json,
+        pool_scopes,
         strip_leading_tags,
     )
 
@@ -180,6 +186,22 @@ MEMORY_CONFIG_KEYS = (
     "memory_recall_min_score",
     "memory_recall_max_chars",
     "memory_diary_enabled",
+    "memory_scope_private_enabled",
+    "memory_scope_group_enabled",
+    "memory_scope_pet_independent",
+    "memory_scope_private_independent",
+    "memory_scope_group_independent",
+)
+
+# 记忆配置里的布尔键（page_memory_config 类型转换用）
+MEMORY_CONFIG_BOOL_KEYS = (
+    "memory_enabled",
+    "memory_diary_enabled",
+    "memory_scope_private_enabled",
+    "memory_scope_group_enabled",
+    "memory_scope_pet_independent",
+    "memory_scope_private_independent",
+    "memory_scope_group_independent",
 )
 
 DEFAULT_PROACTIVE_ENABLED = True
@@ -780,10 +802,9 @@ class DesktopPetBridge(Star):
 
     # ---------- 管道模式：给桌宠 webchat 会话追加输出格式要求 ----------
 
-    # priority=10：先于 LivingMemory（priority 0）执行。LivingMemory 在 on_llm_request
-    # 里把用户消息连同发送者信息存入自己的会话库，此时若发送者仍是 webchat 的
-    # "desktop_pet"，其记忆反思（总结 prompt 强制使用消息前缀昵称）会把 "desktop_pet"
-    # 当主人昵称写进长期记忆——该问题曾两次修复（身份改写/数据清洗）均因晚于存储而复发。
+    # 桌宠 webchat 会话的发送者是内部账号 "desktop_pet"：若不修正，任何读取
+    # sender 昵称的下游（会话上下文、本插件群聊式归属、历史上的 LivingMemory）
+    # 都会把 "desktop_pet" 当成主人昵称。这里统一改写为主人的 QQ 号/称呼。
     @filter.on_llm_request(priority=10)
     async def pre_fix_pet_sender(self, event: AstrMessageEvent, req: ProviderRequest):
         umo = event.unified_msg_origin or ""
@@ -958,6 +979,46 @@ class DesktopPetBridge(Star):
     def _memory_diary_enabled(self) -> bool:
         return bool(self.config.get("memory_diary_enabled", True))
 
+    def _memory_scope_private_enabled(self) -> bool:
+        return bool(self.config.get("memory_scope_private_enabled", True))
+
+    def _memory_scope_group_enabled(self) -> bool:
+        return bool(self.config.get("memory_scope_group_enabled", True))
+
+    def _memory_scope_independent(self) -> frozenset:
+        """当前被标记为「独立」的范围集合。"""
+        return frozenset(
+            s
+            for s in MEMORY_SCOPES
+            if self.config.get(f"memory_scope_{s}_independent", False)
+        )
+
+    def _memory_scope_of(self, event: AstrMessageEvent):
+        """事件 → 记忆范围（pet/private/group）；未启用或不属于捕获范围返回 None。
+
+        pet：桌宠 webchat 会话；private：主人 master_qq 的私聊；group：群聊。
+        """
+        umo = event.unified_msg_origin or ""
+        if self._is_pet_umo(umo):
+            return "pet"
+        try:
+            mt = event.get_message_type()
+            mtype = getattr(mt, "value", None) or str(mt)
+        except Exception:
+            mtype = ""
+        if mtype == "FriendMessage":
+            if not self._memory_scope_private_enabled():
+                return None
+            master = self._master_qq()
+            try:
+                sender = str(event.get_sender_id() or "").strip()
+            except Exception:
+                sender = ""
+            return "private" if master and sender == master else None
+        if mtype == "GroupMessage":
+            return "group" if self._memory_scope_group_enabled() else None
+        return None
+
     def _init_memory(self) -> None:
         try:
             try:
@@ -1061,13 +1122,27 @@ class DesktopPetBridge(Star):
     async def pet_mem_capture_req(self, event: AstrMessageEvent, req: ProviderRequest):
         if not self._memory_enabled() or self._mem_store is None:
             return
-        if not self._is_pet_umo(event.unified_msg_origin or ""):
+        scope = self._memory_scope_of(event)
+        if scope is None:
             return
         text = _IDENT_REMINDER.sub("", getattr(req, "prompt", None) or "").strip()
         if not text:
             return
+        if scope == "group":
+            # 群聊：说话人前缀落库，反思时事实才能归属到具体的人
+            try:
+                who = str(event.get_sender_name() or "").strip()
+            except Exception:
+                who = ""
+            if not who:
+                try:
+                    who = str(event.get_sender_id() or "").strip()
+                except Exception:
+                    who = ""
+            if who:
+                text = f"{who}: {text}"
         try:
-            self._mem_store.log_message("user", text)
+            self._mem_store.log_message("user", text, scope)
         except Exception as e:
             logger.warning(f"[desktop_pet] memory log user msg failed: {e}")
 
@@ -1075,22 +1150,23 @@ class DesktopPetBridge(Star):
     async def pet_mem_capture_resp(self, event: AstrMessageEvent, resp: LLMResponse):
         if not self._memory_enabled() or self._mem_store is None:
             return
-        if not self._is_pet_umo(event.unified_msg_origin or ""):
+        scope = self._memory_scope_of(event)
+        if scope is None:
             return
         if getattr(resp, "tools_call_name", None):
             return  # 工具循环中间响应不入记忆
         zh, _jp = self._split_jp(getattr(resp, "completion_text", "") or "")
         core = strip_leading_tags(zh)
         if not core:
-            if "略过" in zh:
-                # 【略过】的场景轮没有记忆价值，整对丢弃
+            if scope == "pet" and "略过" in zh:
+                # 【略过】的场景轮没有记忆价值，整对丢弃（桌宠专属机制）
                 try:
-                    self._mem_store.delete_last_user_message()
+                    self._mem_store.delete_last_user_message("pet")
                 except Exception:
                     pass
             return
         try:
-            self._mem_store.log_message("assistant", core)
+            self._mem_store.log_message("assistant", core, scope)
             if (
                 self._mem_store.unreflected_pairs_count()
                 >= self._memory_reflect_rounds()
@@ -1107,9 +1183,12 @@ class DesktopPetBridge(Star):
     async def inject_pet_memory(self, event: AstrMessageEvent, req: ProviderRequest):
         if not self._memory_enabled() or self._mem_store is None:
             return
-        if not self._is_pet_umo(event.unified_msg_origin or ""):
+        scope = self._memory_scope_of(event)
+        if scope is None:
             return
-        result = await self._memory_recall_block(getattr(req, "prompt", None) or "")
+        result = await self._memory_recall_block(
+            getattr(req, "prompt", None) or "", scope=scope
+        )
         if not result or not result.get("block"):
             return
         block = result["block"]
@@ -1125,14 +1204,16 @@ class DesktopPetBridge(Star):
             logger.warning(f"[desktop_pet] inject memory via extra parts failed: {e}")
             req.prompt = (req.prompt or "") + "\n\n" + block
 
-    async def _memory_recall_block(self, query: str, dry: bool = False):
+    async def _memory_recall_block(self, query: str, scope: str = "pet", dry: bool = False):
         """向量召回 + 混合重排 + 档案常驻，返回 {"block", "hits", "vector"} 或 None。
 
+        scope 决定召回池（独立范围只见自己，否则见所有未独立范围）。
         dry=True 时（控制页召回测试）不更新召回统计。
         """
         store = self._mem_store
         if store is None:
             return None
+        pool = pool_scopes(scope, self._memory_scope_independent())
         top_k = self._memory_recall_top_k()
         min_score = self._memory_recall_min_score()
         terms = extract_terms(query or "")
@@ -1146,9 +1227,9 @@ class DesktopPetBridge(Star):
                 model = self._memory_embed_model_id(prov)
                 ok = await asyncio.to_thread(store.ensure_index, model, len(vec))
                 if ok:
-                    raw = await asyncio.to_thread(store.vec_search, vec, top_k * 3)
+                    raw = await asyncio.to_thread(store.vec_search, vec, top_k * 4)
                     rows = await asyncio.to_thread(
-                        store.get_memories_by_ids, [mid for mid, _ in raw]
+                        store.get_memories_by_ids, [mid for mid, _ in raw], pool
                     )
                     for mid, cos in raw:
                         row = rows.get(mid)
@@ -1170,7 +1251,7 @@ class DesktopPetBridge(Star):
                 logger.warning(f"[desktop_pet] memory vector recall failed, fallback: {e}")
         if not hits:
             # 降级：无向量命中时按重要度 + 时效取最近的高分记忆
-            rows = await asyncio.to_thread(store.recent_active, top_k * 2)
+            rows = await asyncio.to_thread(store.recent_active, top_k * 2, ("profile",), pool)
             for row in rows:
                 dt = parse_dt(row["created_at"])
                 age_days = max(0.0, (now - dt).total_seconds() / 86400) if dt else 0.0
@@ -1180,7 +1261,7 @@ class DesktopPetBridge(Star):
                 )
                 hits.append(row)
         hits.sort(key=lambda r: r["score"], reverse=True)
-        pinned = await asyncio.to_thread(store.profile_memories, 5)
+        pinned = await asyncio.to_thread(store.profile_memories, 5, pool)
         final: list[dict] = list(pinned)
         seen = {m["id"] for m in final}
         for h in hits:
@@ -1195,7 +1276,7 @@ class DesktopPetBridge(Star):
         if not dry:
             await asyncio.to_thread(store.touch_recalled, [m["id"] for m in final])
         return {
-            "block": build_injection(final, self._memory_recall_max_chars()),
+            "block": build_injection(final, self._memory_recall_max_chars(), scope=scope),
             "hits": final,
             "vector": used_vector,
         }
@@ -1217,42 +1298,60 @@ class DesktopPetBridge(Star):
             if provider is None:
                 logger.warning("[desktop_pet] memory reflect skipped: no llm provider")
                 return
-            resp = await provider.text_chat(
-                prompt=build_reflect_prompt(rows, self._master_name()),
-                system_prompt=REFLECT_SYSTEM,
-            )
-            items = parse_memories_json(getattr(resp, "completion_text", "") or "")
-            new_items = []
-            seen_norm = set()
-            for it in items:
-                it["content"] = self._memory_rewrite_identity(it["content"])
-                n = norm_text(it["content"])
-                if n in seen_norm:
-                    continue
-                seen_norm.add(n)
-                dup = await asyncio.to_thread(store.find_duplicate, it["content"])
-                if dup is None:
-                    new_items.append(it)
-            embedded = await self._memory_embed_texts(
-                [it["content"] for it in new_items]
-            )
-            for i, it in enumerate(new_items):
-                vec = model = None
-                if embedded:
-                    vec, model = embedded[0][i], embedded[1]
-                await asyncio.to_thread(
-                    store.add_memory,
-                    it["kind"],
-                    it["content"],
-                    it["importance"],
-                    "chat",
-                    vec,
-                    model,
-                )
-            logger.info(
-                f"[desktop_pet] memory reflect: +{len(new_items)} memories "
-                f"({len(items)} extracted, {len(rows)} msgs)"
-            )
+            # 按来源范围分组：每组单独反思，产物落在对应 scope
+            groups: dict[str, list] = {}
+            for row in rows:
+                groups.setdefault(row[4] if len(row) > 4 else "pet", []).append(row)
+            for scope, srows in groups.items():
+                try:
+                    system = REFLECT_SYSTEM + (
+                        REFLECT_SYSTEM_GROUP_ADDENDUM if scope == "group" else ""
+                    )
+                    resp = await provider.text_chat(
+                        prompt=build_reflect_prompt(
+                            srows, self._master_name(), scope=scope
+                        ),
+                        system_prompt=system,
+                    )
+                    items = parse_memories_json(getattr(resp, "completion_text", "") or "")
+                    new_items = []
+                    seen_norm = set()
+                    for it in items:
+                        it["content"] = self._memory_rewrite_identity(it["content"])
+                        n = norm_text(it["content"])
+                        if n in seen_norm:
+                            continue
+                        seen_norm.add(n)
+                        dup = await asyncio.to_thread(store.find_duplicate, it["content"])
+                        if dup is None:
+                            new_items.append(it)
+                    embedded = await self._memory_embed_texts(
+                        [it["content"] for it in new_items]
+                    )
+                    for i, it in enumerate(new_items):
+                        vec = model = None
+                        if embedded:
+                            vec, model = embedded[0][i], embedded[1]
+                        await asyncio.to_thread(
+                            store.add_memory,
+                            it["kind"],
+                            it["content"],
+                            it["importance"],
+                            "chat",
+                            vec,
+                            model,
+                            scope,
+                        )
+                    logger.info(
+                        f"[desktop_pet] memory reflect[{scope}]: +{len(new_items)} memories "
+                        f"({len(items)} extracted, {len(srows)} msgs)"
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        f"[desktop_pet] memory reflect[{scope}] failed (skipped): {e}"
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1310,7 +1409,7 @@ class DesktopPetBridge(Star):
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         if await asyncio.to_thread(store.get_meta, "last_diary_date") == yesterday:
             return None
-        rows = await asyncio.to_thread(store.chat_log_of_date, yesterday)
+        rows = await asyncio.to_thread(store.chat_log_of_date, yesterday, "pet")
         if len(rows) < 4:  # 不足两轮对话不记
             await asyncio.to_thread(store.set_meta, "last_diary_date", yesterday)
             return None
@@ -1386,7 +1485,7 @@ class DesktopPetBridge(Star):
             logger.warning(f"[desktop_pet] memory reembed failed: {e}")
 
     async def _memory_import_livingmemory(self):
-        """从 LivingMemory 库只读导入桌宠会话的存量记忆（身份改写 + 去重 + 嵌入）。"""
+        """从 LivingMemory 库只读全量导入（按会话映射 pet/private/group 范围）。"""
         store = self._mem_store
         lm_path = (
             Path(__file__).resolve().parents[2]
@@ -1398,6 +1497,7 @@ class DesktopPetBridge(Star):
             store.fetch_livingmemory_candidates,
             lm_path,
             self._pet_session_id(),
+            self._master_qq(),
             self._master_name() or "主人",
         )
         if result.get("error"):
@@ -1413,6 +1513,7 @@ class DesktopPetBridge(Star):
             else:
                 pending.append(it)
         imported = 0
+        by_scope: dict[str, int] = {}
         for i in range(0, len(pending), 64):
             batch = pending[i : i + 64]
             embedded = await self._memory_embed_texts([it["content"] for it in batch])
@@ -1428,16 +1529,23 @@ class DesktopPetBridge(Star):
                     "import",
                     vec,
                     model,
+                    it.get("scope") or "pet",
                 )
                 imported += 1
+                sc = it.get("scope") or "pet"
+                by_scope[sc] = by_scope.get(sc, 0) + 1
+        skipped_sessions = result.get("skipped_sessions") or {}
         logger.info(
             f"[desktop_pet] imported {imported} memories from LivingMemory "
-            f"(skipped {skipped} dups)"
+            f"(by_scope={by_scope}, dup_skipped={skipped}, "
+            f"unmapped_sessions={skipped_sessions})"
         )
         return {
             "found": result.get("found", 0),
             "imported": imported,
             "skipped": skipped,
+            "by_scope": by_scope,
+            "skipped_sessions": skipped_sessions,
         }
 
     # ---- 控制页后端 ----
@@ -1497,6 +1605,17 @@ class DesktopPetBridge(Star):
                 "memory_recall_min_score": self._memory_recall_min_score(),
                 "memory_recall_max_chars": self._memory_recall_max_chars(),
                 "memory_diary_enabled": self._memory_diary_enabled(),
+                "memory_scope_private_enabled": self._memory_scope_private_enabled(),
+                "memory_scope_group_enabled": self._memory_scope_group_enabled(),
+                "memory_scope_pet_independent": bool(
+                    self.config.get("memory_scope_pet_independent", False)
+                ),
+                "memory_scope_private_independent": bool(
+                    self.config.get("memory_scope_private_independent", False)
+                ),
+                "memory_scope_group_independent": bool(
+                    self.config.get("memory_scope_group_independent", False)
+                ),
                 "embedding_providers": self._list_embedding_providers(),
                 "llm_providers": [p["id"] for p in self._list_providers()],
             }
@@ -1507,7 +1626,7 @@ class DesktopPetBridge(Star):
                 continue
             v = payload[k]
             try:
-                if k in ("memory_enabled", "memory_diary_enabled"):
+                if k in MEMORY_CONFIG_BOOL_KEYS:
                     v = bool(v)
                 elif k in (
                     "memory_reflect_rounds",
@@ -1529,16 +1648,19 @@ class DesktopPetBridge(Star):
     async def page_memory_query(self):
         if self._mem_store is None:
             return error_response("记忆存储未就绪", status_code=500)
-        q, offset, limit = "", 0, 20
+        q, offset, limit, scope = "", 0, 20, ""
         try:
             query = getattr(request, "query", None) or {}
             q = str(query.get("q", "") or "").strip()
+            scope = str(query.get("scope", "") or "").strip()
+            if scope not in MEMORY_SCOPES:
+                scope = ""
             offset = max(0, int(query.get("offset", 0) or 0))
             limit = min(100, max(1, int(query.get("limit", 20) or 20)))
         except (TypeError, ValueError, AttributeError):
             pass
         items, total = await asyncio.to_thread(
-            self._mem_store.list_memories, q, offset, limit
+            self._mem_store.list_memories, q, offset, limit, scope
         )
         return {
             "summary": self._memory_summary(),
@@ -1546,6 +1668,7 @@ class DesktopPetBridge(Star):
             "total": total,
             "offset": offset,
             "limit": limit,
+            "scope": scope,
         }
 
     async def page_memory_op(self):
@@ -1561,6 +1684,9 @@ class DesktopPetBridge(Star):
             if len(content) < 2:
                 return error_response("content is required", status_code=400)
             kind = str(payload.get("kind") or "fact").strip()
+            scope = str(payload.get("scope") or "pet").strip()
+            if scope not in MEMORY_SCOPES:
+                scope = "pet"
             try:
                 importance = int(payload.get("importance", 3))
             except (TypeError, ValueError):
@@ -1573,7 +1699,7 @@ class DesktopPetBridge(Star):
             if embedded:
                 vec, model = embedded[0][0], embedded[1]
             mid = await asyncio.to_thread(
-                store.add_memory, kind, content, importance, "manual", vec, model
+                store.add_memory, kind, content, importance, "manual", vec, model, scope
             )
             return {"added": True, "id": mid}
         if action == "delete":
@@ -1614,20 +1740,29 @@ class DesktopPetBridge(Star):
         text = str(payload.get("text") or "").strip()
         if not text:
             return error_response("text is required", status_code=400)
-        result = await self._memory_recall_block(text, dry=True)
+        scope = str(payload.get("scope") or "pet").strip()
+        if scope not in MEMORY_SCOPES:
+            scope = "pet"
+        result = await self._memory_recall_block(text, scope=scope, dry=True)
         if not result:
-            return {"block": "", "hits": [], "vector": False}
+            return {"block": "", "hits": [], "vector": False, "scope": scope}
         hits = [
             {
                 "id": h["id"],
                 "kind": h["kind"],
+                "scope": h.get("scope"),
                 "content": h["content"][:80],
                 "cos": h.get("cos"),
                 "score": round(h.get("score", 0.0), 3),
             }
             for h in result["hits"]
         ]
-        return {"block": result["block"], "hits": hits, "vector": result["vector"]}
+        return {
+            "block": result["block"],
+            "hits": hits,
+            "vector": result["vector"],
+            "scope": scope,
+        }
 
     # ---------- 内部逻辑 ----------
 

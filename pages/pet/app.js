@@ -378,6 +378,7 @@ async function saveAsrConfig() {
 // ---------- 内置记忆 ----------
 
 const MEM_KIND_LABELS = { profile: "档案", fact: "事实", event: "事件", mood: "心情", promise: "约定", scene: "观察", diary: "日记" };
+const MEM_SCOPE_LABELS = { pet: "桌宠", private: "私聊", group: "群聊" };
 let memoryOffset = 0;
 const MEM_PAGE_LIMIT = 20;
 
@@ -385,6 +386,11 @@ async function loadMemoryConfig() {
   const cfg = await bridge.apiGet("page/memory_config");
   $("memory-enabled").checked = !!cfg.memory_enabled;
   $("memory-diary-enabled").checked = cfg.memory_diary_enabled !== false;
+  $("memory-scope-private-enabled").checked = cfg.memory_scope_private_enabled !== false;
+  $("memory-scope-group-enabled").checked = cfg.memory_scope_group_enabled !== false;
+  $("memory-scope-pet-independent").checked = !!cfg.memory_scope_pet_independent;
+  $("memory-scope-private-independent").checked = !!cfg.memory_scope_private_independent;
+  $("memory-scope-group-independent").checked = !!cfg.memory_scope_group_independent;
   $("memory-embed-provider").value = cfg.memory_embedding_provider_id || "";
   $("memory-llm-provider").value = cfg.memory_provider_id || "";
   $("memory-reflect-rounds").value = cfg.memory_reflect_rounds ?? 8;
@@ -419,6 +425,7 @@ function renderMemoryState(s) {
     return;
   }
   const kindStr = Object.entries(s.by_kind || {}).map(([k, n]) => `${MEM_KIND_LABELS[k] || k} ${n}`).join(" / ");
+  const scopeStr = Object.entries(s.by_scope || {}).map(([k, n]) => `${MEM_SCOPE_LABELS[k] || k} ${n}`).join(" / ");
   let vecLine;
   if (s.vector) {
     vecLine = `<span class="ok">● 向量召回</span>  ${esc(s.embedding_provider || "")}${s.embedding_dim ? ` · ${s.embedding_dim} 维` : ""}` +
@@ -428,7 +435,7 @@ function renderMemoryState(s) {
     vecLine = `<span class="warn-color">● 降级召回</span>（无可用嵌入模型，按重要度+时效召回）`;
   }
   box.innerHTML =
-    `记忆库：共 ${s.total_active} 条（${kindStr || "暂无"}）\n` +
+    `记忆库：共 ${s.total_active} 条（${kindStr || "暂无"}）${scopeStr ? `\n范围分布：${scopeStr}` : ""}\n` +
     `召回：${vecLine}\n` +
     `待反思：${s.unreflected_pairs} 轮 · 最近反思：${esc(s.last_reflect_at || "（从未）")} · 最近日记：${esc(s.last_diary_date || "（无）")}`;
 }
@@ -440,6 +447,11 @@ async function saveMemoryConfig() {
     await bridge.apiPost("page/memory_config", {
       memory_enabled: $("memory-enabled").checked,
       memory_diary_enabled: $("memory-diary-enabled").checked,
+      memory_scope_private_enabled: $("memory-scope-private-enabled").checked,
+      memory_scope_group_enabled: $("memory-scope-group-enabled").checked,
+      memory_scope_pet_independent: $("memory-scope-pet-independent").checked,
+      memory_scope_private_independent: $("memory-scope-private-independent").checked,
+      memory_scope_group_independent: $("memory-scope-group-independent").checked,
       memory_embedding_provider_id: $("memory-embed-provider").value.trim(),
       memory_provider_id: $("memory-llm-provider").value.trim(),
       memory_reflect_rounds: Number($("memory-reflect-rounds").value),
@@ -460,8 +472,9 @@ async function saveMemoryConfig() {
 async function queryMemories(reset) {
   if (reset) memoryOffset = 0;
   const q = encodeURIComponent($("memory-search").value.trim());
+  const scope = encodeURIComponent($("memory-filter-scope").value);
   try {
-    const r = await bridge.apiGet(`page/memory_query?q=${q}&offset=${memoryOffset}&limit=${MEM_PAGE_LIMIT}`);
+    const r = await bridge.apiGet(`page/memory_query?q=${q}&scope=${scope}&offset=${memoryOffset}&limit=${MEM_PAGE_LIMIT}`);
     renderMemoryState(r.summary);
     const list = $("memory-list");
     const items = r.items || [];
@@ -474,7 +487,7 @@ async function queryMemories(reset) {
         row.className = "mem-row";
         const content = document.createElement("span");
         content.className = "mem-content";
-        content.textContent = `[${String(m.created_at || "").slice(0, 10)}·${MEM_KIND_LABELS[m.kind] || m.kind}] ${m.content}`;
+        content.textContent = `[${String(m.created_at || "").slice(0, 10)}·${MEM_KIND_LABELS[m.kind] || m.kind}·${MEM_SCOPE_LABELS[m.scope] || m.scope || "桌宠"}] ${m.content}`;
         row.appendChild(content);
         const sel = document.createElement("select");
         for (let i = 1; i <= 5; i++) {
@@ -517,7 +530,8 @@ async function memoryOp(action, extra, btn) {
   try {
     const r = await bridge.apiPost("page/memory_op", { action, ...(extra || {}) });
     if (action === "import_livingmemory") {
-      msg.textContent = `导入完成：库中匹配 ${r.found} 条，新增 ${r.imported} 条，去重跳过 ${r.skipped} 条。`;
+      const bs = Object.entries(r.by_scope || {}).map(([k, n]) => `${MEM_SCOPE_LABELS[k] || k} ${n}`).join("/");
+      msg.textContent = `迁移完成：库中 ${r.found} 条，新增 ${r.imported} 条${bs ? `（${bs}）` : ""}，去重跳过 ${r.skipped} 条。`;
     } else if (action === "reflect_now" || action === "reembed") {
       msg.textContent = r.started ? "任务已开始，稍后点「刷新」看结果。" : `未开始：${r.reason || ""}`;
     } else {
@@ -538,12 +552,15 @@ async function testMemoryRecall() {
   box.classList.remove("hidden");
   box.textContent = "召回中…";
   try {
-    const r = await bridge.apiPost("page/memory_recall_test", { text: $("memory-test-text").value });
+    const r = await bridge.apiPost("page/memory_recall_test", {
+      text: $("memory-test-text").value,
+      scope: $("memory-test-scope").value,
+    });
     const lines = (r.hits || []).map(
-      (h) => `- [${MEM_KIND_LABELS[h.kind] || h.kind}]${h.cos != null ? ` cos=${h.cos}` : ""} score=${h.score}  ${h.content}`
+      (h) => `- [${MEM_KIND_LABELS[h.kind] || h.kind}·${MEM_SCOPE_LABELS[h.scope] || h.scope || "?"}]${h.cos != null ? ` cos=${h.cos}` : ""} score=${h.score}  ${h.content}`
     );
     box.textContent =
-      `召回方式：${r.vector ? "向量" : "降级（重要度+时效）"}\n` +
+      `召回范围：${MEM_SCOPE_LABELS[r.scope] || r.scope} · 召回方式：${r.vector ? "向量" : "降级（重要度+时效）"}\n` +
       (lines.length ? lines.join("\n") : "（无命中）") +
       (r.block ? `\n\n—— 实际注入块 ——\n${r.block}` : "");
   } catch (e) {
@@ -562,6 +579,7 @@ async function addMemory() {
       content: $("memory-add-content").value.trim(),
       kind: $("memory-add-kind").value,
       importance: Number($("memory-add-importance").value),
+      scope: $("memory-add-scope").value,
     });
     if (r.added) {
       msg.textContent = `已添加（#${r.id}）。`;
@@ -618,6 +636,7 @@ $("btn-memory-reflect").addEventListener("click", (e) => memoryOp("reflect_now",
 $("btn-memory-reembed").addEventListener("click", (e) => memoryOp("reembed", {}, e.target));
 $("btn-memory-test").addEventListener("click", testMemoryRecall);
 $("btn-memory-search").addEventListener("click", () => queryMemories(true));
+$("memory-filter-scope").addEventListener("change", () => queryMemories(true));
 $("btn-memory-prev").addEventListener("click", () => { memoryOffset = Math.max(0, memoryOffset - MEM_PAGE_LIMIT); queryMemories(false); });
 $("btn-memory-next").addEventListener("click", () => { memoryOffset += MEM_PAGE_LIMIT; queryMemories(false); });
 $("btn-memory-add").addEventListener("click", addMemory);

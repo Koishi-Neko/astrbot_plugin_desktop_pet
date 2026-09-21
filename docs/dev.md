@@ -14,7 +14,7 @@
 └───────────────────────┘                └──────────────────────────────┘
 ```
 
-桌宠作为 webchat 会话（`webchat!desktop_pet!desktop_pet`）走 AstrBot open API `/api/v1/chat`，自动获得**会话级人格**、平台历史与日志——人格/历史均在 AstrBot 侧管理，壳端不存历史。**长期记忆为本插件内置**（`pet_memory.py`，v0.4.0 起）：`on_llm_request(+10)`/`on_llm_response` 捕获桌宠会话消息落 `chat_log`，攒满 `memory_reflect_rounds` 轮由 LLM 反思抽取记忆条目（档案/事件/心情/约定/观察，身份一律改写为主人称呼），嵌入模型向量（`get_all_embedding_providers`）随条目入库；`on_llm_request(-5)` 对每条消息做向量召回（faiss 内存索引，启动时从 sqlite 的 BLOB 列重建、不落盘），混合重要度/时效/专名加成重排后经 `extra_user_content_parts` + `mark_as_temp()` 瞬时注入（不落会话历史）。无 embedding provider 时自动降级为「重要度+时效」召回，不拒用。每日 04:40 维护任务：重要度衰减、陈旧软删、缺失向量补嵌、可选「桌宠日记」。控制页「内置记忆」卡提供配置/统计/浏览/增删/召回测试/从 LivingMemory 只读导入。LivingMemory 对桌宠会话的接管通过从其 `access_control.allowed_ids` 移除桌宠 umo 完成（QQ 侧不受影响）。插件其余职责不变：格式注入、TTS 代理与控制页。
+桌宠作为 webchat 会话（`webchat!desktop_pet!desktop_pet`）走 AstrBot open API `/api/v1/chat`，自动获得**会话级人格**、平台历史与日志——人格/历史均在 AstrBot 侧管理，壳端不存历史。**长期记忆为本插件内置**（`pet_memory.py`，v0.4.0 起；v0.5.0 起多范围）：`on_llm_request(+10)`/`on_llm_response` 捕获消息落 `chat_log`（带 `scope` 列：`pet`=桌宠 webchat、`private`=主人 master_qq 私聊、`group`=群聊；群聊用户消息带「昵称: 」前缀供反思归属），攒满 `memory_reflect_rounds` 轮按 scope 分组由 LLM 反思抽取记忆条目（档案/事件/心情/约定/观察，身份一律改写为主人称呼，群聊有专属补充规则），嵌入模型向量（`get_all_embedding_providers`，分批 ≤16 兼容阿里云限制）随条目入库；`on_llm_request(-5)` 对每条消息做向量召回（faiss 内存索引，启动时从 sqlite 的 BLOB 列重建、不落盘），召回池按「独立开关」动态计算（独立范围只见自己，否则见所有未独立范围），混合重要度/时效/专名加成重排后经 `extra_user_content_parts` + `mark_as_temp()` 瞬时注入（不落会话历史）。无 embedding provider 时自动降级为「重要度+时效」召回，不拒用。每日 04:40 维护任务：重要度衰减、陈旧软删、缺失向量补嵌、可选「桌宠日记」（仅 pet scope）。控制页「内置记忆」卡提供配置/统计/浏览/增删/召回测试/从 LivingMemory 全量迁移（按会话映射三范围）。v0.5.0 起 LivingMemory 可整体禁用（`inactivated_plugins`），QQ 侧记忆亦由本插件接管。插件其余职责不变：格式注入、TTS 代理与控制页。
 
 > WebView2 有 CORS 限制，前端不直接 fetch 插件接口：所有 HTTP 走 Rust reqwest 原生层（`pet_*` Tauri 命令），SSE 经 Tauri event 推回前端。
 
@@ -71,7 +71,7 @@ app.js speakJpStandalone ─► pet_tts_sbv2 (Rust, Query 参数) ─► {tts_ur
 
 ## 插件（main.py）要点
 
-- 钩子：`on_llm_request`（**priority=-10**，须后于注入型插件执行——本插件自己的记忆注入在 **priority=-5**，第三方如 LivingMemory 在默认 0）对桌宠会话注入【情绪】中文【JP】日语格式要求 + 主人身份改写；`on_llm_request(+10)` 捕获用户消息落记忆 chat_log（同优先级另有 `pre_fix_pet_sender` 修正 LivingMemory 侧发送者身份）；`on_llm_response` 捕获助手回复（剥【情绪】【JP】，【略过】整对丢弃）并按轮数触发后台反思；`on_decorating_result` 把 QQ 回复拆成 `Plain(中文)+Record(日语配音)`。
+- 钩子：`on_llm_request`（**priority=-10**，须后于注入型插件执行——本插件自己的记忆注入在 **priority=-5**）对桌宠会话注入【情绪】中文【JP】日语格式要求 + 主人身份改写；`on_llm_request(+10)` 捕获用户消息落记忆 chat_log（同优先级另有 `pre_fix_pet_sender` 修正发送者身份）；`on_llm_response` 捕获助手回复（剥【情绪】【JP】，【略过】整对丢弃，仅 pet scope）并按轮数触发后台反思；`on_decorating_result` 把 QQ 回复拆成 `Plain(中文)+Record(日语配音)`。
 - 身份改写：`_rewrite_pet_identity()` 改写当前请求 `extra_user_content_parts` + 历史 `contexts` + `req.prompt`/`system_prompt`（`provider_settings.identifier` 会把 `User ID: desktop_pet` 追加进每条用户消息，不改写模型会把用户叫成 desktop_pet）。
 - 长人格 prompt 会稀释 system 侧格式要求 → 在**用户消息末尾**补格式提醒（桌宠和 QQ 两侧都需要）。
 - 配置持久化：写回 `data/config/astrbot_plugin_desktop_pet_config.json` 即时生效；schema 包含新增的 `scene_provider`, `scene_blocklist`, `proactive_enabled`, `scene_enabled`, `scene_interval_min`, `voice_input_enabled`, `asr_url` 等。与控制页重叠的键全部 `invisible: true`，仅 `pet_session_id` 可见（内部常量，不应让用户改）。

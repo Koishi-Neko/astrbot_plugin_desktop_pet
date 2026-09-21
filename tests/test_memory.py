@@ -183,23 +183,31 @@ def test_store_diary_log_query(store):
 
 
 def test_import_livingmemory(store, tmp_path):
-    # 造一个迷你 LivingMemory 库
+    # 造一个迷你 LivingMemory 库：桌宠会话 + 主人私聊 + 陌生人私聊 + 群聊
     lm = tmp_path / "livingmemory.db"
     con = sqlite3.connect(str(lm))
     con.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY, text TEXT, metadata TEXT)")
     meta1 = json.dumps({"session_id": "webchat:FriendMessage:webchat!desktop_pet!desktop_pet", "importance": 0.9})
-    meta2 = json.dumps({"session_id": "aiocqhttp:GroupMessage:123", "importance": 0.5})
+    meta2 = json.dumps({"session_id": "napcat:FriendMessage:1819987185", "importance": 0.5})
+    meta3 = json.dumps({"session_id": "napcat:FriendMessage:999999", "importance": 0.5})
+    meta4 = json.dumps({"session_id": "napcat:GroupMessage:123", "importance": 0.5})
     con.execute("INSERT INTO documents(text, metadata) VALUES (?, ?)", ("desktop_pet 喜欢智乃", meta1))
-    con.execute("INSERT INTO documents(text, metadata) VALUES (?, ?)", ("群友闲聊", meta2))
+    con.execute("INSERT INTO documents(text, metadata) VALUES (?, ?)", ("1819987185 的生日是 6 月 1 日", meta2))
+    con.execute("INSERT INTO documents(text, metadata) VALUES (?, ?)", ("陌生人的事", meta3))
+    con.execute("INSERT INTO documents(text, metadata) VALUES (?, ?)", ("群友约定周五开黑", meta4))
     con.commit()
     con.close()
-    result = store.fetch_livingmemory_candidates(lm, "desktop_pet", "小智")
+    result = store.fetch_livingmemory_candidates(lm, "desktop_pet", "1819987185", "小智")
     assert result["error"] is None
-    assert result["found"] == 1
-    assert result["items"][0]["content"] == "小智 喜欢智乃"
-    assert result["items"][0]["importance"] == 5  # 0.9 → 5
+    assert result["found"] == 4  # 全量扫描
+    by_scope = {it["scope"]: it for it in result["items"]}
+    assert by_scope["pet"]["content"] == "小智 喜欢智乃"
+    assert by_scope["pet"]["importance"] == 5  # 0.9 → 5
+    assert by_scope["private"]["content"] == "小智 的生日是 6 月 1 日"  # QQ 号改写为主人称呼
+    assert by_scope["group"]["content"] == "群友约定周五开黑"
+    assert result["skipped_sessions"] == {"napcat:FriendMessage:999999": 1}  # 陌生人私聊跳过
     # 不存在的库
-    bad = store.fetch_livingmemory_candidates(tmp_path / "nope.db", "desktop_pet", "小智")
+    bad = store.fetch_livingmemory_candidates(tmp_path / "nope.db", "desktop_pet", "1819987185", "小智")
     assert bad["error"] and bad["items"] == []
 
 
@@ -319,3 +327,182 @@ def test_memory_disabled_hook_noop(tmp_path):
     # 钩子本体被装饰器 mock 掉，无法直接调；这里验证引擎开关语义：
     # disabled 时 main.py 钩子入口直接 return（由 _memory_enabled 把关）
     assert bridge._memory_enabled() is False
+
+
+# ---------- 多范围（scope） ----------
+
+from types import SimpleNamespace
+
+from pet_memory import (
+    MEMORY_SCOPES,
+    REFLECT_SYSTEM_GROUP_ADDENDUM,
+    pool_scopes,
+    scope_of_lm_session,
+)
+
+
+def test_pool_scopes_semantics():
+    assert pool_scopes("pet", frozenset()) == ["pet", "private", "group"]  # 全混合
+    assert pool_scopes("group", frozenset()) == ["pet", "private", "group"]
+    assert pool_scopes("group", frozenset({"group"})) == ["group"]  # 自己独立
+    assert pool_scopes("pet", frozenset({"group"})) == ["pet", "private"]  # 别人独立
+    assert pool_scopes("pet", frozenset({"group", "private"})) == ["pet"]
+    assert pool_scopes("pet", frozenset({"pet", "group"})) == ["pet"]
+
+
+def test_scope_of_lm_session():
+    pet = scope_of_lm_session("webchat:FriendMessage:webchat!desktop_pet!desktop_pet", "desktop_pet", "1819987185")
+    assert pet == "pet"
+    assert scope_of_lm_session("napcat:FriendMessage:1819987185", "desktop_pet", "1819987185") == "private"
+    assert scope_of_lm_session("napcat:FriendMessage:999999", "desktop_pet", "1819987185") is None  # 陌生人私聊
+    assert scope_of_lm_session("aiocqhttp:GroupMessage:123", "desktop_pet", "1819987185") == "group"
+    assert scope_of_lm_session("", "desktop_pet", "1819987185") is None
+    assert scope_of_lm_session("napcat:FriendMessage:1819987185", "desktop_pet", "") is None  # 未配 master_qq 不猜
+
+
+def test_schema_migration_adds_scope(tmp_path):
+    """旧 schema（无 scope 列）的库打开后自动补列，存量数据归为 pet，且幂等。"""
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(str(db))
+    con.executescript(
+        """
+        CREATE TABLE memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL DEFAULT 'fact',
+            content TEXT NOT NULL,
+            importance INTEGER NOT NULL DEFAULT 3,
+            source TEXT NOT NULL DEFAULT 'chat',
+            embedding BLOB, emb_dim INTEGER, emb_model TEXT,
+            created_at TEXT NOT NULL,
+            last_recalled_at TEXT,
+            recall_count INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE chat_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        """
+    )
+    con.execute("INSERT INTO memories(kind, content, created_at) VALUES ('fact', '旧记忆', '2026-01-01 00:00:00')")
+    con.execute("INSERT INTO chat_log(role, content, created_at) VALUES ('user', '旧消息', '2026-01-01 00:00:00')")
+    con.commit()
+    con.close()
+    store = PetMemoryStore(db)
+    item, total = store.list_memories("")
+    assert total == 1 and item[0]["scope"] == "pet"
+    rows = store.chat_log_of_date("2026-01-01")
+    assert len(rows) == 1 and rows[0][4] == "pet"
+    store2 = PetMemoryStore(db)  # 幂等：重复打开不报错
+    assert store2.list_memories("")[1] == 1
+
+
+def test_log_message_scope_and_scoped_delete(store):
+    store.log_message("user", "桌宠消息", "pet")
+    store.log_message("user", "群聊消息", "group")
+    store.log_message("assistant", "群聊回复", "group")
+    store.delete_last_user_message("pet")  # 只删 pet 的最后一条 user
+    rows, _ = store.unreflected_window(10)
+    contents = [(r[1], r[2], r[4]) for r in rows]
+    assert ("user", "群聊消息", "group") in contents
+    assert ("user", "桌宠消息", "pet") not in contents
+
+
+def test_scope_filtered_queries(store):
+    p1 = store.add_memory("profile", "主人叫小智", 5, "chat", scope="pet")
+    p2 = store.add_memory("profile", "主人在私聊说过怕黑", 4, "chat", scope="private")
+    e1 = store.add_memory("event", "群里周五开黑", 3, "chat", scope="group")
+    e2 = store.add_memory("event", "主人桌宠聊天", 3, "chat", scope="pet")
+    # 混合池（无独立）：全见
+    mixed = ["pet", "private", "group"]
+    assert set(store.get_memories_by_ids([p1, p2, e1, e2], mixed)) == {p1, p2, e1, e2}
+    # 群独立池：只见 group
+    assert set(store.get_memories_by_ids([p1, p2, e1, e2], ["group"])) == {e1}
+    assert [m["id"] for m in store.profile_memories(5, ["group"])] == []
+    assert {m["id"] for m in store.profile_memories(5, mixed)} == {p1, p2}
+    assert {m["id"] for m in store.recent_active(10, ("profile",), ["pet"])} == {e2}
+    # list_memories 的 scope 筛选
+    assert store.list_memories("", scope="group")[1] == 1
+    assert store.list_memories("", scope="")[1] == 4
+    # stats 带 by_scope
+    assert store.stats()["by_scope"] == {"pet": 2, "private": 1, "group": 1}
+
+
+def test_build_injection_scope_preface():
+    mems = [{"kind": "fact", "content": "主人喜欢智乃", "created_at": "2026-09-01 10:00:00"}]
+    pet_block = build_injection(mems, 800, scope="pet")
+    group_block = build_injection(mems, 800, scope="group")
+    assert "你与主人之间过去的记忆" in pet_block
+    assert "从过往聊天中记住的事情" in group_block
+    assert "主人喜欢智乃" in group_block
+
+
+def test_build_reflect_prompt_group():
+    rows = [(1, "user", "小明: 周五开黑吗", "2026-09-10 20:00:00", "group")]
+    p = build_reflect_prompt(rows, "小智", scope="group")
+    assert "群成员" in p and "小明: 周五开黑吗" in p
+    assert "群聊补充规则" in REFLECT_SYSTEM_GROUP_ADDENDUM
+    p2 = build_reflect_prompt(rows, "小智", scope="pet")
+    assert "小智：" in p2  # 非群聊仍用主人称呼
+
+
+def test_scope_classifier(tmp_path):
+    bridge, _ = _make_bridge(tmp_path)
+    bridge.config["master_qq"] = "1819987185"
+    # 桌宠 umo
+    ev = MagicMock()
+    ev.unified_msg_origin = "webchat:FriendMessage:webchat!desktop_pet!desktop_pet"
+    assert bridge._memory_scope_of(ev) == "pet"
+    # 主人私聊（get_message_type 返回带 value 的枚举式对象）
+    ev2 = MagicMock()
+    ev2.unified_msg_origin = "napcat:FriendMessage:1819987185"
+    ev2.get_message_type.return_value = SimpleNamespace(value="FriendMessage")
+    ev2.get_sender_id.return_value = "1819987185"
+    assert bridge._memory_scope_of(ev2) == "private"
+    # 陌生人私聊 → None
+    ev2.get_sender_id.return_value = "999999"
+    assert bridge._memory_scope_of(ev2) is None
+    # 私聊开关关 → None
+    bridge.config["memory_scope_private_enabled"] = False
+    ev2.get_sender_id.return_value = "1819987185"
+    assert bridge._memory_scope_of(ev2) is None
+    bridge.config["memory_scope_private_enabled"] = True
+    # 群聊（get_message_type 直接返回字符串的兜底路径）
+    ev3 = MagicMock()
+    ev3.unified_msg_origin = "napcat:GroupMessage:700542954"
+    ev3.get_message_type.return_value = "GroupMessage"
+    assert bridge._memory_scope_of(ev3) == "group"
+    # 群聊开关关 → None
+    bridge.config["memory_scope_group_enabled"] = False
+    assert bridge._memory_scope_of(ev3) is None
+    # 异常兜底
+    ev4 = MagicMock()
+    ev4.unified_msg_origin = "weird"
+    ev4.get_message_type.side_effect = RuntimeError("boom")
+    assert bridge._memory_scope_of(ev4) is None
+
+
+def test_reflect_groups_by_scope(tmp_path):
+    """混合 scope 的 chat_log 按组反思，产物落对应 scope。"""
+    bridge, llm = _make_bridge(tmp_path, "[]")
+
+    async def chat(prompt=None, system_prompt=None, **kw):
+        llm.calls.append({"prompt": prompt, "system_prompt": system_prompt})
+        if "群成员" in (prompt or ""):
+            return _FakeResp('[{"kind":"fact","content":"群里约周五开黑","importance":3}]')
+        return _FakeResp('[{"kind":"fact","content":"主人桌宠日常","importance":3}]')
+
+    llm.text_chat = chat
+    bridge._mem_store.log_message("user", "桌宠说", "pet")
+    bridge._mem_store.log_message("assistant", "桌宠回", "pet")
+    bridge._mem_store.log_message("user", "小明: 群里说", "group")
+    bridge._mem_store.log_message("assistant", "群里回", "group")
+    asyncio.run(bridge._memory_reflect())
+    assert len(llm.calls) == 2  # pet / group 各一次 LLM 调用
+    items, total = bridge._mem_store.list_memories("")
+    assert total == 2
+    scopes = {m["content"]: m["scope"] for m in items}
+    assert scopes == {"主人桌宠日常": "pet", "群里约周五开黑": "group"}
+    group_call = [c for c in llm.calls if "群成员" in c["prompt"]]
+    assert group_call and "群聊补充规则" in group_call[0]["system_prompt"]

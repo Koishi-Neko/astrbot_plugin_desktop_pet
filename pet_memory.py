@@ -9,6 +9,8 @@ embedding / LLM provider 全部由调用方（main.py）注入，便于单元测
 - 降级：无 faiss / 无 embedding provider / 向量缺失时自动退化为
   「重要度 + 时效」召回，任何情况下记忆功能都可用。
 - 时间戳一律 ISO 文本（%Y-%m-%d %H:%M:%S），绝不写 float（避免解析灾难）。
+- 范围（scope）：pet / private / group。每条记忆与每行 chat_log 记录来源 scope；
+  召回池由「独立开关」在召回时动态计算（pool_scopes），切开关即重分区存量数据。
 """
 
 from __future__ import annotations
@@ -33,6 +35,38 @@ KIND_LABELS = {
     "diary": "日记",
 }
 
+MEMORY_SCOPES = ("pet", "private", "group")
+
+SCOPE_LABELS = {
+    "pet": "桌宠",
+    "private": "私聊",
+    "group": "群聊",
+}
+
+
+def pool_scopes(scope: str, independent) -> list[str]:
+    """计算某范围当前可召回的记忆池：独立范围只见自己；否则见所有未独立范围。"""
+    indep = frozenset(independent or ())
+    if scope in indep:
+        return [scope]
+    return [s for s in MEMORY_SCOPES if s not in indep]
+
+
+def scope_of_lm_session(session_id: str, pet_sid: str, master_qq: str):
+    """LivingMemory session_id（umo 格式）→ 本库 scope；无法判定返回 None。"""
+    sid = str(session_id or "")
+    if not sid:
+        return None
+    if pet_sid and pet_sid in sid:
+        return "pet"
+    if ":FriendMessage:" in sid:
+        if master_qq and sid.rsplit(":", 1)[-1].strip() == str(master_qq).strip():
+            return "private"
+        return None
+    if ":GroupMessage:" in sid:
+        return "group"
+    return None
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +74,7 @@ CREATE TABLE IF NOT EXISTS memories (
     content TEXT NOT NULL,
     importance INTEGER NOT NULL DEFAULT 3,
     source TEXT NOT NULL DEFAULT 'chat',
+    scope TEXT NOT NULL DEFAULT 'pet',
     embedding BLOB,
     emb_dim INTEGER,
     emb_model TEXT,
@@ -53,6 +88,7 @@ CREATE TABLE IF NOT EXISTS chat_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'pet',
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (
@@ -60,6 +96,12 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 """
+
+# 老库升级：缺 scope 列则补（存量数据全部是桌宠会话产物，默认 pet 正确）
+_MIGRATIONS = (
+    ("memories", "scope", "ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'pet'"),
+    ("chat_log", "scope", "ALTER TABLE chat_log ADD COLUMN scope TEXT NOT NULL DEFAULT 'pet'"),
+)
 
 _TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -138,7 +180,7 @@ def blend_score(
     )
 
 
-def build_injection(memories: list[dict], max_chars: int) -> str:
+def build_injection(memories: list[dict], max_chars: int, scope: str = "pet") -> str:
     """把选中的记忆格式化为注入块；max_chars 为硬预算（按字符截断列表）。"""
     lines = []
     used = 0
@@ -155,10 +197,17 @@ def build_injection(memories: list[dict], max_chars: int) -> str:
         used += len(line)
     if not lines:
         return ""
-    return (
-        "【桌宠记忆】以下是你与主人之间过去的记忆，仅供你自然地参考与呼应；"
-        "不要逐字复述，也不要向主人提及「记忆」机制本身：\n" + "\n".join(lines)
-    )
+    if scope == "pet":
+        preface = (
+            "【桌宠记忆】以下是你与主人之间过去的记忆，仅供你自然地参考与呼应；"
+            "不要逐字复述，也不要向主人提及「记忆」机制本身：\n"
+        )
+    else:
+        preface = (
+            "【长期记忆】以下是你从过往聊天中记住的事情，仅供你自然地参考与呼应；"
+            "不要逐字复述，也不要向对方提及「记忆」机制本身：\n"
+        )
+    return preface + "\n".join(lines)
 
 
 def parse_memories_json(raw: str) -> list[dict]:
@@ -226,25 +275,45 @@ REFLECT_SYSTEM = (
     "- 只输出 JSON 数组，不要输出任何其他文字"
 )
 
+REFLECT_SYSTEM_GROUP_ADDENDUM = (
+    "\n群聊补充规则：\n"
+    "- 对话来自群聊，user 行的发言者已以「昵称: 」前缀标出；事实必须归属到具体的人，"
+    "content 中保留该人的称呼\n"
+    "- 只有明确提及主人的条目才使用主人称呼；其他成员的事实写清成员昵称\n"
+    "- 群聊里的灌水/表情包接龙/与任何人都无关的闲聊一律不抽取"
+)
 
-def build_reflect_prompt(rows: list, master_name: str) -> str:
-    """rows: [(id, role, content, created_at)]；返回反思用户 prompt。"""
+
+def build_reflect_prompt(rows: list, master_name: str, scope: str = "pet") -> str:
+    """rows: [(id, role, content, created_at, scope)]；返回反思用户 prompt。"""
     name = master_name or "主人"
     lines = []
-    for _id, role, content, created_at in rows[:40]:
-        who = name if role == "user" else "桌宠"
+    for row in rows[:40]:
+        _id, role, content, created_at = row[0], row[1], row[2], row[3]
+        if scope == "group":
+            who = "群成员" if role == "user" else "桌宠"
+        else:
+            who = name if role == "user" else "桌宠"
         lines.append(f"[{str(created_at)[:16]}] {who}：{str(content)[:300]}")
-    return (
-        f"主人的称呼是「{name}」。以下是桌宠与主人最近的对话片段，"
-        "请按系统要求抽取长期记忆：\n\n" + "\n".join(lines)
-    )
+    if scope == "group":
+        intro = (
+            f"主人的称呼是「{name}」（如果发言者昵称与主人对应，用主人称呼）。"
+            "以下是群聊里最近的对话片段，请按系统要求（含群聊补充规则）抽取长期记忆：\n\n"
+        )
+    else:
+        intro = (
+            f"主人的称呼是「{name}」。以下是桌宠与主人最近的对话片段，"
+            "请按系统要求抽取长期记忆：\n\n"
+        )
+    return intro + "\n".join(lines)
 
 
 def build_diary_prompt(rows: list, master_name: str, date_str: str) -> str:
-    """rows: [(id, role, content, created_at)]；返回日记用户 prompt。"""
+    """rows: [(id, role, content, created_at, ...)]（容忍多余列）；返回日记用户 prompt。"""
     name = master_name or "主人"
     lines = []
-    for _id, role, content, created_at in rows[:60]:
+    for row in rows[:60]:
+        _id, role, content, created_at = row[0], row[1], row[2], row[3]
         who = name if role == "user" else "桌宠"
         lines.append(f"[{str(created_at)[:16]}] {who}：{str(content)[:200]}")
     return (
@@ -297,6 +366,14 @@ class PetMemoryStore:
     def _ensure_schema(self):
         with self._connect() as con:
             con.executescript(_SCHEMA)
+            for table, col, ddl in _MIGRATIONS:
+                cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+                if col not in cols:
+                    con.execute(ddl)
+            # 依赖迁移列的索引必须在其后创建（老库此时才有 scope 列）
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(active, scope)"
+            )
 
     def get_meta(self, key: str, default=None):
         with self._connect() as con:
@@ -319,39 +396,56 @@ class PetMemoryStore:
             "content": r[2],
             "importance": r[3],
             "source": r[4],
-            "created_at": r[5],
-            "last_recalled_at": r[6],
-            "recall_count": r[7],
-            "emb_dim": r[8],
-            "emb_model": r[9],
-            "has_embedding": r[8] is not None,
+            "scope": r[5],
+            "scope_label": SCOPE_LABELS.get(r[5], r[5]),
+            "created_at": r[6],
+            "last_recalled_at": r[7],
+            "recall_count": r[8],
+            "emb_dim": r[9],
+            "emb_model": r[10],
+            "has_embedding": r[9] is not None,
         }
 
-    _COLS = "id, kind, content, importance, source, created_at, last_recalled_at, recall_count, emb_dim, emb_model"
+    _COLS = "id, kind, content, importance, source, scope, created_at, last_recalled_at, recall_count, emb_dim, emb_model"
+
+    @staticmethod
+    def _scope_sql(scopes, column: str = "scope"):
+        """scopes=None 不过滤；否则生成 (sql_fragment, params)。"""
+        if not scopes:
+            return "", []
+        marks = ",".join("?" for _ in scopes)
+        return f" AND {column} IN ({marks})", list(scopes)
 
     # ---------- chat_log（反思窗口缓冲） ----------
 
-    def log_message(self, role: str, content: str) -> None:
+    def log_message(self, role: str, content: str, scope: str = "pet") -> None:
+        if scope not in MEMORY_SCOPES:
+            scope = "pet"
         with self._connect() as con:
             con.execute(
-                "INSERT INTO chat_log(role, content, created_at) VALUES (?,?,?)",
-                (role, (content or "")[:4000], now_str()),
+                "INSERT INTO chat_log(role, content, scope, created_at) VALUES (?,?,?,?)",
+                (role, (content or "")[:4000], scope, now_str()),
             )
 
-    def delete_last_user_message(self) -> None:
-        """【略过】的场景轮整对丢弃：删掉刚落库的最后一条用户消息。"""
+    def delete_last_user_message(self, scope: str = "pet") -> None:
+        """【略过】的场景轮整对丢弃：删掉该 scope 刚落库的最后一条用户消息。"""
         with self._connect() as con:
             con.execute(
                 "DELETE FROM chat_log WHERE id = "
-                "(SELECT id FROM chat_log WHERE role='user' ORDER BY id DESC LIMIT 1)"
+                "(SELECT id FROM chat_log WHERE role='user' AND scope=? "
+                "ORDER BY id DESC LIMIT 1)",
+                (scope,),
             )
 
     def unreflected_window(self, max_pairs: int):
-        """返回 (rows, max_id)：光标之后的最多 max_pairs*2 条消息与其末行 id。"""
+        """返回 (rows, max_id)：光标之后的最多 max_pairs*2 条消息与其末行 id。
+
+        rows 为 5 元组 (id, role, content, created_at, scope)。
+        """
         last = int(self.get_meta("last_reflected_log_id", "0") or 0)
         with self._connect() as con:
             rows = con.execute(
-                "SELECT id, role, content, created_at FROM chat_log "
+                "SELECT id, role, content, created_at, scope FROM chat_log "
                 "WHERE id > ? ORDER BY id LIMIT ?",
                 (last, max(2, max_pairs * 2)),
             ).fetchall()
@@ -376,12 +470,12 @@ class PetMemoryStore:
                 (keep,),
             )
 
-    def chat_log_of_date(self, date_str: str) -> list:
+    def chat_log_of_date(self, date_str: str, scope: str = "pet") -> list:
         with self._connect() as con:
             return con.execute(
-                "SELECT id, role, content, created_at FROM chat_log "
-                "WHERE created_at LIKE ? ORDER BY id",
-                (f"{date_str}%",),
+                "SELECT id, role, content, created_at, scope FROM chat_log "
+                "WHERE created_at LIKE ? AND scope=? ORDER BY id",
+                (f"{date_str}%", scope),
             ).fetchall()
 
     # ---------- memories CRUD ----------
@@ -394,33 +488,38 @@ class PetMemoryStore:
         source: str = "chat",
         vec=None,
         emb_model: str | None = None,
+        scope: str = "pet",
     ) -> int:
         if kind not in MEMORY_KINDS:
             kind = "fact"
+        if scope not in MEMORY_SCOPES:
+            scope = "pet"
         blob = dim = None
         if vec:
             blob = vec_to_blob(vec)
             dim = len(vec)
         with self._connect() as con:
             cur = con.execute(
-                "INSERT INTO memories(kind, content, importance, source, embedding,"
-                " emb_dim, emb_model, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO memories(kind, content, importance, source, scope, embedding,"
+                " emb_dim, emb_model, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (kind, content[:500], min(5, max(1, int(importance))), source,
-                 blob, dim, emb_model, now_str()),
+                 scope, blob, dim, emb_model, now_str()),
             )
             mid = cur.lastrowid
         if blob and self._index is not None and self._index_key == (emb_model, dim):
             self.vec_add(mid, vec)
         return mid
 
-    def get_memories_by_ids(self, ids: list[int]) -> dict:
+    def get_memories_by_ids(self, ids: list[int], scopes=None) -> dict:
         if not ids:
             return {}
         marks = ",".join("?" for _ in ids)
+        scope_sql, params = self._scope_sql(scopes)
         with self._connect() as con:
             rows = con.execute(
-                f"SELECT {self._COLS} FROM memories WHERE active=1 AND id IN ({marks})",
-                tuple(ids),
+                f"SELECT {self._COLS} FROM memories WHERE active=1 AND id IN ({marks})"
+                + scope_sql,
+                (*ids, *params),
             ).fetchall()
         return {r[0]: self._row_to_dict(r) for r in rows}
 
@@ -463,37 +562,48 @@ class PetMemoryStore:
                 (now_str(), *ids),
             )
 
-    def profile_memories(self, limit: int = 5) -> list[dict]:
+    def profile_memories(self, limit: int = 5, scopes=None) -> list[dict]:
+        scope_sql, params = self._scope_sql(scopes)
         with self._connect() as con:
             rows = con.execute(
-                f"SELECT {self._COLS} FROM memories WHERE active=1 AND kind='profile' "
-                "ORDER BY importance DESC, id DESC LIMIT ?",
-                (limit,),
+                f"SELECT {self._COLS} FROM memories WHERE active=1 AND kind='profile'"
+                + scope_sql
+                + " ORDER BY importance DESC, id DESC LIMIT ?",
+                (*params, limit),
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
-    def recent_active(self, limit: int = 10, exclude_kinds=("profile",)) -> list[dict]:
+    def recent_active(self, limit: int = 10, exclude_kinds=("profile",), scopes=None) -> list[dict]:
         marks = ",".join("?" for _ in exclude_kinds)
+        scope_sql, params = self._scope_sql(scopes)
         with self._connect() as con:
             rows = con.execute(
                 f"SELECT {self._COLS} FROM memories WHERE active=1 "
-                f"AND kind NOT IN ({marks}) ORDER BY importance DESC, id DESC LIMIT ?",
-                (*exclude_kinds, limit),
+                f"AND kind NOT IN ({marks})"
+                + scope_sql
+                + " ORDER BY importance DESC, id DESC LIMIT ?",
+                (*exclude_kinds, *params, limit),
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
-    def list_memories(self, q: str = "", offset: int = 0, limit: int = 20):
-        """返回 (items, total)；q 为内容子串。"""
+    def list_memories(self, q: str = "", offset: int = 0, limit: int = 20, scope: str = ""):
+        """返回 (items, total)；q 为内容子串，scope 为空串表示全部范围。"""
         like = f"%{q}%"
+        scope_sql = ""
+        params: list = [like]
+        if scope in MEMORY_SCOPES:
+            scope_sql = " AND scope=?"
+            params.append(scope)
         with self._connect() as con:
             total = con.execute(
-                "SELECT COUNT(*) FROM memories WHERE active=1 AND content LIKE ?",
-                (like,),
+                "SELECT COUNT(*) FROM memories WHERE active=1 AND content LIKE ?" + scope_sql,
+                params,
             ).fetchone()[0]
             rows = con.execute(
-                f"SELECT {self._COLS} FROM memories WHERE active=1 AND content LIKE ? "
-                "ORDER BY id DESC LIMIT ? OFFSET ?",
-                (like, limit, offset),
+                f"SELECT {self._COLS} FROM memories WHERE active=1 AND content LIKE ?"
+                + scope_sql
+                + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
         return [self._row_to_dict(r) for r in rows], total
 
@@ -505,6 +615,11 @@ class PetMemoryStore:
             by_kind = dict(
                 con.execute(
                     "SELECT kind, COUNT(*) FROM memories WHERE active=1 GROUP BY kind"
+                ).fetchall()
+            )
+            by_scope = dict(
+                con.execute(
+                    "SELECT scope, COUNT(*) FROM memories WHERE active=1 GROUP BY scope"
                 ).fetchall()
             )
             with_emb = con.execute(
@@ -521,6 +636,7 @@ class PetMemoryStore:
         return {
             "total_active": total,
             "by_kind": by_kind,
+            "by_scope": by_scope,
             "with_embedding": with_emb,
             "missing_embedding": total - with_emb,
             "stale_embedding": stale,
@@ -581,8 +697,14 @@ class PetMemoryStore:
 
     # ---------- LivingMemory 导入 ----------
 
-    def fetch_livingmemory_candidates(self, lm_db_path, sid: str, master_name: str) -> dict:
-        """只读扫描 LivingMemory documents 表中桌宠会话的记忆，返回去重后的候选条目。"""
+    def fetch_livingmemory_candidates(
+        self, lm_db_path, pet_sid: str, master_qq: str, master_name: str
+    ) -> dict:
+        """只读全量扫描 LivingMemory documents 表，按会话映射 scope 后返回候选条目。
+
+        映射规则见 scope_of_lm_session；无法判定 scope 的会话（如陌生人私聊）跳过。
+        返回 {"found", "items"(带 scope), "skipped_sessions", "error"}。
+        """
         path = Path(lm_db_path)
         if not path.exists():
             return {"found": 0, "items": [], "error": f"未找到 {path}"}
@@ -600,9 +722,7 @@ class PetMemoryStore:
             if "documents" not in tables:
                 return {"found": 0, "items": [], "error": "documents 表不存在"}
             rows = con.execute(
-                "SELECT text, metadata FROM documents "
-                "WHERE json_valid(metadata) AND json_extract(metadata, '$.session_id') LIKE ?",
-                (f"%{sid}%",),
+                "SELECT text, metadata FROM documents WHERE json_valid(metadata)"
             ).fetchall()
         except Exception as e:
             con.close()
@@ -611,27 +731,45 @@ class PetMemoryStore:
         name = master_name or "主人"
         items = []
         seen = set()
+        skipped_sessions: dict[str, int] = {}
         for text, metadata in rows:
+            try:
+                meta = json.loads(metadata or "{}")
+            except (ValueError, TypeError):
+                meta = {}
+            lm_sid = str(meta.get("session_id") or "")
+            scope = scope_of_lm_session(lm_sid, pet_sid, master_qq)
+            if scope is None:
+                skipped_sessions[lm_sid or "?"] = skipped_sessions.get(lm_sid or "?", 0) + 1
+                continue
             content = str(text or "").strip()
             if not content:
                 continue
-            if sid and sid in content:
-                content = content.replace(sid, name)
+            if pet_sid and pet_sid in content:
+                content = content.replace(pet_sid, name)
+            if master_qq and str(master_qq) in content:
+                content = content.replace(str(master_qq), name)
             n = norm_text(content)
             if not n or n in seen:
                 continue
             seen.add(n)
             imp = 3
-            try:
-                meta = json.loads(metadata or "{}")
-                raw_imp = meta.get("importance")
-                if raw_imp is not None:
+            raw_imp = meta.get("importance")
+            if raw_imp is not None:
+                try:
                     v = float(raw_imp)
                     imp = min(5, max(1, round(1 + 4 * v))) if v <= 1.0 else min(5, max(1, round(v)))
-            except (ValueError, TypeError):
-                pass
-            items.append({"kind": "fact", "content": content[:500], "importance": imp})
-        return {"found": len(rows), "items": items, "error": None}
+                except (ValueError, TypeError):
+                    pass
+            items.append(
+                {"kind": "fact", "content": content[:500], "importance": imp, "scope": scope}
+            )
+        return {
+            "found": len(rows),
+            "items": items,
+            "skipped_sessions": skipped_sessions,
+            "error": None,
+        }
 
     # ---------- faiss 内存索引（惰性加载，永不落盘） ----------
 
