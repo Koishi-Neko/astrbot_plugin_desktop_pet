@@ -13,6 +13,12 @@
 - POST /api/v1/plugins/extensions/desktop_pet/pet/status_report 壳端状态上报（监控用）
 - astrbot_plugin_desktop_pet/page/*                             WebUI 控制页后端
 
+内置长期记忆（pet_memory.py，独立于 LivingMemory）：桌宠会话消息落 chat_log，
+攒满 memory_reflect_rounds 轮后由 LLM 反思抽取记忆条目（档案/事件/心情/约定/观察），
+嵌入模型向量入库；对话时按余弦相似度 + 重要度/时效混合重排召回，经
+extra_user_content_parts 瞬时注入（不落会话历史）。无 embedding provider 时自动降级为
+「重要度+时效」召回，功能不拒用。每日 04:40 维护（衰减/软删/补嵌/桌宠日记）。
+
 TTS：配置 tts_enabled=true 后，要求模型输出「【情绪】中文正文【JP】日语配音稿」，
 壳端解析出日语句后逐句调 pet/tts，插件转发 Style-Bert-VITS2（server_fastapi）合成返回 base64 wav。
 QQ 日语配音（qq_jp_dub_enabled）：on_decorating_result 把回复拆成 Plain(中文)+Record(日语 wav)。
@@ -33,10 +39,41 @@ import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Plain, Record
-from astrbot.api.provider import ProviderRequest
+from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, request
 from starlette.responses import JSONResponse
+
+try:  # AstrBot 以包方式加载插件；pytest 平面布局回退为同级导入
+    from .pet_memory import (
+        REFLECT_SYSTEM,
+        PetMemoryStore,
+        blend_score,
+        build_diary_prompt,
+        build_injection,
+        build_reflect_prompt,
+        extract_terms,
+        norm_text,
+        now_str,
+        parse_dt,
+        parse_memories_json,
+        strip_leading_tags,
+    )
+except ImportError:
+    from pet_memory import (
+        REFLECT_SYSTEM,
+        PetMemoryStore,
+        blend_score,
+        build_diary_prompt,
+        build_injection,
+        build_reflect_prompt,
+        extract_terms,
+        norm_text,
+        now_str,
+        parse_dt,
+        parse_memories_json,
+        strip_leading_tags,
+    )
 
 # 情绪集合需与 pet_shell/assets/ 下的立绘文件名一一对应
 EMOTIONS = ["平静", "高兴", "生气", "害羞", "惊讶", "难过", "疑惑", "调皮"]
@@ -133,6 +170,18 @@ ASR_CONFIG_KEYS = (
     "asr_url",
 )
 
+# 内置长期记忆（控制页编辑；向量召回 + LLM 反思，独立于 LivingMemory）
+MEMORY_CONFIG_KEYS = (
+    "memory_enabled",
+    "memory_embedding_provider_id",
+    "memory_provider_id",
+    "memory_reflect_rounds",
+    "memory_recall_top_k",
+    "memory_recall_min_score",
+    "memory_recall_max_chars",
+    "memory_diary_enabled",
+)
+
 DEFAULT_PROACTIVE_ENABLED = True
 DEFAULT_SCENE_ENABLED = False
 DEFAULT_SCENE_INTERVAL_MIN = 30
@@ -149,6 +198,10 @@ DEFAULT_INTENT_PERCEIVE_KEYWORDS = (
     "看看桌面\n看看窗口\n当前窗口\n屏幕上\n看看这个\n"
     "look at my screen\nwhat's on my screen\nwhat am i doing"
 )
+DEFAULT_MEMORY_REFLECT_ROUNDS = 8
+DEFAULT_MEMORY_RECALL_TOP_K = 5
+DEFAULT_MEMORY_RECALL_MIN_SCORE = 0.35
+DEFAULT_MEMORY_RECALL_MAX_CHARS = 800
 
 
 class DesktopPetBridge(Star):
@@ -158,6 +211,10 @@ class DesktopPetBridge(Star):
 
     async def initialize(self):
         self._shell_report = None  # 壳端最近一次状态上报 {"at": epoch, ...}
+        self._mem_store = None  # 内置记忆存储（PetMemoryStore，_init_memory 填充）
+        self._mem_reflect_task = None
+        self._mem_daily_task = None
+        self._mem_reembed_task = None
         self.context.register_web_api(
             "desktop_pet/pet/health",
             self.health,
@@ -249,15 +306,43 @@ class DesktopPetBridge(Star):
             ["GET"],
             "桌宠控制页：获取 Token 统计",
         )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/memory_config",
+            self.page_memory_config,
+            ["GET", "POST"],
+            "桌宠控制页：读写内置记忆配置",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/memory_query",
+            self.page_memory_query,
+            ["GET"],
+            "桌宠控制页：记忆统计与浏览",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/memory_op",
+            self.page_memory_op,
+            ["POST"],
+            "桌宠控制页：记忆操作（添加/删除/导入/立即反思/重建向量）",
+        )
+        self.context.register_web_api(
+            "astrbot_plugin_desktop_pet/page/memory_recall_test",
+            self.page_memory_recall_test,
+            ["POST"],
+            "桌宠控制页：记忆召回测试",
+        )
         logger.info(
             "[desktop_pet] web api registered: desktop_pet/pet/*, desktop_pet/page/*"
         )
         self._gc_task = asyncio.create_task(self._history_gc_loop())
+        self._init_memory()
+        if self._mem_store is not None:
+            self._mem_daily_task = asyncio.create_task(self._memory_daily_loop())
 
     async def terminate(self):
-        task = getattr(self, "_gc_task", None)
-        if task:
-            task.cancel()
+        for attr in ("_gc_task", "_mem_daily_task", "_mem_reflect_task", "_mem_reembed_task"):
+            task = getattr(self, attr, None)
+            if task:
+                task.cancel()
         logger.info("[desktop_pet] plugin terminated")
 
     # ---------- 路由处理 ----------
@@ -414,7 +499,13 @@ class DesktopPetBridge(Star):
             if os.path.exists(path):
                 with open(path, encoding="utf-8-sig") as f:
                     data = json.load(f)
-            for k in TTS_CONFIG_KEYS + PAGE_CONFIG_KEYS + SCENE_CONFIG_KEYS + ASR_CONFIG_KEYS:
+            for k in (
+                TTS_CONFIG_KEYS
+                + PAGE_CONFIG_KEYS
+                + SCENE_CONFIG_KEYS
+                + ASR_CONFIG_KEYS
+                + MEMORY_CONFIG_KEYS
+            ):
                 if k in self.config:
                     data[k] = self.config[k]
             with open(path, "w", encoding="utf-8") as f:
@@ -455,6 +546,7 @@ class DesktopPetBridge(Star):
             "scene": self._scene_payload(),
             "asr": self._asr_payload(),
             "asr_state": (self._shell_report or {}).get("asr"),
+            "memory": self._memory_summary(),
             "shell_report": self._shell_report,
             "shell_report_age_s": (
                 round(time.time() - self._shell_report["at"]) if self._shell_report else None
@@ -814,6 +906,728 @@ class DesktopPetBridge(Star):
             new_chain.append(comp)
         if changed:
             result.chain = new_chain
+
+    # ---------- 内置长期记忆（向量召回 + LLM 反思，独立于 LivingMemory） ----------
+
+    def _memory_enabled(self) -> bool:
+        return bool(self.config.get("memory_enabled", True))
+
+    def _memory_reflect_rounds(self) -> int:
+        try:
+            return max(
+                2,
+                int(
+                    self.config.get("memory_reflect_rounds")
+                    or DEFAULT_MEMORY_REFLECT_ROUNDS
+                ),
+            )
+        except (TypeError, ValueError):
+            return DEFAULT_MEMORY_REFLECT_ROUNDS
+
+    def _memory_recall_top_k(self) -> int:
+        try:
+            return max(
+                1,
+                int(self.config.get("memory_recall_top_k") or DEFAULT_MEMORY_RECALL_TOP_K),
+            )
+        except (TypeError, ValueError):
+            return DEFAULT_MEMORY_RECALL_TOP_K
+
+    def _memory_recall_min_score(self) -> float:
+        try:
+            return float(
+                self.config.get("memory_recall_min_score")
+                if self.config.get("memory_recall_min_score") is not None
+                else DEFAULT_MEMORY_RECALL_MIN_SCORE
+            )
+        except (TypeError, ValueError):
+            return DEFAULT_MEMORY_RECALL_MIN_SCORE
+
+    def _memory_recall_max_chars(self) -> int:
+        try:
+            return max(
+                100,
+                int(
+                    self.config.get("memory_recall_max_chars")
+                    or DEFAULT_MEMORY_RECALL_MAX_CHARS
+                ),
+            )
+        except (TypeError, ValueError):
+            return DEFAULT_MEMORY_RECALL_MAX_CHARS
+
+    def _memory_diary_enabled(self) -> bool:
+        return bool(self.config.get("memory_diary_enabled", True))
+
+    def _init_memory(self) -> None:
+        try:
+            try:
+                from astrbot.api.star import StarTools
+
+                data_dir = Path(StarTools.get_data_dir("astrbot_plugin_desktop_pet"))
+            except Exception:
+                data_dir = (
+                    Path(__file__).resolve().parents[2]
+                    / "plugin_data"
+                    / "astrbot_plugin_desktop_pet"
+                )
+            self._mem_store = PetMemoryStore(data_dir / "memory.db")
+            logger.info(f"[desktop_pet] memory store ready: {self._mem_store.db_path}")
+        except Exception as e:
+            logger.warning(f"[desktop_pet] memory store init failed: {e}")
+            self._mem_store = None
+
+    def _is_pet_umo(self, umo: str) -> bool:
+        sid = self._pet_session_id()
+        return umo.startswith("webchat:") and umo.endswith(f"!{sid}")
+
+    def _memory_embed_provider(self):
+        """当前可用的 embedding provider；未配置/失效返回 None（记忆降级，绝不拒用）。"""
+        pid = str(self.config.get("memory_embedding_provider_id") or "").strip()
+        try:
+            if pid:
+                p = self.context.get_provider_by_id(pid)
+                return p if p is not None and hasattr(p, "get_embedding") else None
+            get_all = getattr(self.context, "get_all_embedding_providers", None)
+            if get_all is None:
+                return None
+            provs = get_all() or []
+            return provs[0] if provs else None
+        except Exception as e:
+            logger.warning(f"[desktop_pet] resolve embedding provider failed: {e}")
+            return None
+
+    @staticmethod
+    def _memory_embed_model_id(prov) -> str:
+        try:
+            return getattr(prov.meta(), "id", None) or "unknown"
+        except Exception:
+            return "unknown"
+
+    async def _memory_llm_provider(self):
+        """反思/日记用 LLM：memory_provider_id 指定，留空跟随桌宠会话当前模型。"""
+        pid = str(self.config.get("memory_provider_id") or "").strip()
+        if pid:
+            try:
+                p = self.context.get_provider_by_id(pid)
+                if p is not None:
+                    return p
+            except Exception:
+                pass
+        try:
+            return await self.context.get_using_provider_async(self._pet_umo())
+        except AttributeError:
+            return self.context.get_using_provider(self._pet_umo())
+        except Exception as e:
+            logger.warning(f"[desktop_pet] resolve memory llm provider failed: {e}")
+            return None
+
+    async def _memory_embed_texts(self, texts: list[str]):
+        """批量嵌入，返回 (vectors, model_id)；provider 不可用/失败返回 None。"""
+        if not texts:
+            return None
+        prov = self._memory_embed_provider()
+        if prov is None:
+            return None
+        try:
+            chunk = 16  # 部分服务商(如阿里云)限制单批 ≤20 条
+            batch = [str(t)[:500] for t in texts]
+            if hasattr(prov, "get_embeddings"):
+                vecs = []
+                for i in range(0, len(batch), chunk):
+                    part = await prov.get_embeddings(batch[i : i + chunk])
+                    if not part:
+                        return None
+                    vecs.extend(part)
+            else:
+                vecs = [await prov.get_embedding(t) for t in batch]
+            if not vecs or len(vecs) != len(texts):
+                return None
+            return vecs, self._memory_embed_model_id(prov)
+        except Exception as e:
+            logger.warning(f"[desktop_pet] memory embed failed: {e}")
+            return None
+
+    def _memory_rewrite_identity(self, text: str) -> str:
+        """记忆文本里的 pet_session_id 一律改写为主人称呼。"""
+        sid = self._pet_session_id()
+        name = self._master_name() or "主人"
+        if sid and sid in text:
+            text = text.replace(sid, name)
+        return text
+
+    # ---- 捕获钩子：用户消息(+10) / 助手回复(on_llm_response) 落 chat_log ----
+
+    @filter.on_llm_request(priority=10)
+    async def pet_mem_capture_req(self, event: AstrMessageEvent, req: ProviderRequest):
+        if not self._memory_enabled() or self._mem_store is None:
+            return
+        if not self._is_pet_umo(event.unified_msg_origin or ""):
+            return
+        text = _IDENT_REMINDER.sub("", getattr(req, "prompt", None) or "").strip()
+        if not text:
+            return
+        try:
+            self._mem_store.log_message("user", text)
+        except Exception as e:
+            logger.warning(f"[desktop_pet] memory log user msg failed: {e}")
+
+    @filter.on_llm_response()
+    async def pet_mem_capture_resp(self, event: AstrMessageEvent, resp: LLMResponse):
+        if not self._memory_enabled() or self._mem_store is None:
+            return
+        if not self._is_pet_umo(event.unified_msg_origin or ""):
+            return
+        if getattr(resp, "tools_call_name", None):
+            return  # 工具循环中间响应不入记忆
+        zh, _jp = self._split_jp(getattr(resp, "completion_text", "") or "")
+        core = strip_leading_tags(zh)
+        if not core:
+            if "略过" in zh:
+                # 【略过】的场景轮没有记忆价值，整对丢弃
+                try:
+                    self._mem_store.delete_last_user_message()
+                except Exception:
+                    pass
+            return
+        try:
+            self._mem_store.log_message("assistant", core)
+            if (
+                self._mem_store.unreflected_pairs_count()
+                >= self._memory_reflect_rounds()
+            ):
+                task = self._mem_reflect_task
+                if task is None or task.done():
+                    self._mem_reflect_task = asyncio.create_task(self._memory_reflect())
+        except Exception as e:
+            logger.warning(f"[desktop_pet] memory log assistant msg failed: {e}")
+
+    # ---- 召回注入钩子：priority=-5，晚于其它注入型插件、早于格式注入(-10) ----
+
+    @filter.on_llm_request(priority=-5)
+    async def inject_pet_memory(self, event: AstrMessageEvent, req: ProviderRequest):
+        if not self._memory_enabled() or self._mem_store is None:
+            return
+        if not self._is_pet_umo(event.unified_msg_origin or ""):
+            return
+        result = await self._memory_recall_block(getattr(req, "prompt", None) or "")
+        if not result or not result.get("block"):
+            return
+        block = result["block"]
+        try:
+            from astrbot.core.agent.message import TextPart
+
+            parts = getattr(req, "extra_user_content_parts", None)
+            if parts is None:
+                req.extra_user_content_parts = []
+                parts = req.extra_user_content_parts
+            parts.append(TextPart(text=block).mark_as_temp())
+        except Exception as e:
+            logger.warning(f"[desktop_pet] inject memory via extra parts failed: {e}")
+            req.prompt = (req.prompt or "") + "\n\n" + block
+
+    async def _memory_recall_block(self, query: str, dry: bool = False):
+        """向量召回 + 混合重排 + 档案常驻，返回 {"block", "hits", "vector"} 或 None。
+
+        dry=True 时（控制页召回测试）不更新召回统计。
+        """
+        store = self._mem_store
+        if store is None:
+            return None
+        top_k = self._memory_recall_top_k()
+        min_score = self._memory_recall_min_score()
+        terms = extract_terms(query or "")
+        now = datetime.now()
+        hits: list[dict] = []
+        used_vector = False
+        prov = self._memory_embed_provider()
+        if prov is not None and (query or "").strip():
+            try:
+                vec = await prov.get_embedding(query[:800])
+                model = self._memory_embed_model_id(prov)
+                ok = await asyncio.to_thread(store.ensure_index, model, len(vec))
+                if ok:
+                    raw = await asyncio.to_thread(store.vec_search, vec, top_k * 3)
+                    rows = await asyncio.to_thread(
+                        store.get_memories_by_ids, [mid for mid, _ in raw]
+                    )
+                    for mid, cos in raw:
+                        row = rows.get(mid)
+                        if row is None or cos < min_score or row["kind"] == "profile":
+                            continue
+                        dt = parse_dt(row["created_at"])
+                        age_days = (
+                            max(0.0, (now - dt).total_seconds() / 86400) if dt else 0.0
+                        )
+                        content_l = row["content"].lower()
+                        sh = sum(1 for t in terms if t in content_l)
+                        row["cos"] = round(cos, 3)
+                        row["score"] = blend_score(
+                            cos, row["importance"], age_days, row["recall_count"], sh
+                        )
+                        hits.append(row)
+                    used_vector = True
+            except Exception as e:
+                logger.warning(f"[desktop_pet] memory vector recall failed, fallback: {e}")
+        if not hits:
+            # 降级：无向量命中时按重要度 + 时效取最近的高分记忆
+            rows = await asyncio.to_thread(store.recent_active, top_k * 2)
+            for row in rows:
+                dt = parse_dt(row["created_at"])
+                age_days = max(0.0, (now - dt).total_seconds() / 86400) if dt else 0.0
+                row["cos"] = None
+                row["score"] = blend_score(
+                    0.0, row["importance"], age_days, row["recall_count"], 0
+                )
+                hits.append(row)
+        hits.sort(key=lambda r: r["score"], reverse=True)
+        pinned = await asyncio.to_thread(store.profile_memories, 5)
+        final: list[dict] = list(pinned)
+        seen = {m["id"] for m in final}
+        for h in hits:
+            if h["id"] in seen:
+                continue
+            final.append(h)
+            seen.add(h["id"])
+            if len(final) >= len(pinned) + top_k:
+                break
+        if not final:
+            return None
+        if not dry:
+            await asyncio.to_thread(store.touch_recalled, [m["id"] for m in final])
+        return {
+            "block": build_injection(final, self._memory_recall_max_chars()),
+            "hits": final,
+            "vector": used_vector,
+        }
+
+    # ---- 反思：事件驱动，攒满 N 轮抽取一次；失败即跳过、光标照常前进，不留积压 ----
+
+    async def _memory_reflect(self):
+        store = self._mem_store
+        if store is None:
+            return
+        max_id = None
+        try:
+            rows, max_id = await asyncio.to_thread(
+                store.unreflected_window, self._memory_reflect_rounds()
+            )
+            if not rows:
+                return
+            provider = await self._memory_llm_provider()
+            if provider is None:
+                logger.warning("[desktop_pet] memory reflect skipped: no llm provider")
+                return
+            resp = await provider.text_chat(
+                prompt=build_reflect_prompt(rows, self._master_name()),
+                system_prompt=REFLECT_SYSTEM,
+            )
+            items = parse_memories_json(getattr(resp, "completion_text", "") or "")
+            new_items = []
+            seen_norm = set()
+            for it in items:
+                it["content"] = self._memory_rewrite_identity(it["content"])
+                n = norm_text(it["content"])
+                if n in seen_norm:
+                    continue
+                seen_norm.add(n)
+                dup = await asyncio.to_thread(store.find_duplicate, it["content"])
+                if dup is None:
+                    new_items.append(it)
+            embedded = await self._memory_embed_texts(
+                [it["content"] for it in new_items]
+            )
+            for i, it in enumerate(new_items):
+                vec = model = None
+                if embedded:
+                    vec, model = embedded[0][i], embedded[1]
+                await asyncio.to_thread(
+                    store.add_memory,
+                    it["kind"],
+                    it["content"],
+                    it["importance"],
+                    "chat",
+                    vec,
+                    model,
+                )
+            logger.info(
+                f"[desktop_pet] memory reflect: +{len(new_items)} memories "
+                f"({len(items)} extracted, {len(rows)} msgs)"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[desktop_pet] memory reflect failed (skipped): {e}")
+        finally:
+            if max_id:
+                try:
+                    await asyncio.to_thread(store.mark_reflected, max_id)
+                    await asyncio.to_thread(store.set_meta, "last_reflect_at", now_str())
+                    await asyncio.to_thread(store.prune_chat_log, 200)
+                except Exception:
+                    pass
+
+    # ---- 每日维护（04:40）：重要度衰减 / 陈旧软删 / 补嵌向量 / 桌宠日记 ----
+
+    async def _memory_daily_loop(self):
+        while True:
+            now = datetime.now()
+            nxt = now.replace(hour=4, minute=40, second=0, microsecond=0)
+            if nxt <= now:
+                nxt += timedelta(days=1)
+            await asyncio.sleep((nxt - now).total_seconds())
+            try:
+                await self._memory_daily_maintenance()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[desktop_pet] memory daily maintenance failed: {e}")
+
+    async def _memory_daily_maintenance(self):
+        if not self._memory_enabled() or self._mem_store is None:
+            return
+        store = self._mem_store
+        decayed, archived = await asyncio.to_thread(store.apply_decay)
+        backfilled = 0
+        missing = await asyncio.to_thread(store.memories_missing_embedding, 200)
+        if missing:
+            embedded = await self._memory_embed_texts([m["content"] for m in missing])
+            if embedded:
+                vecs, model = embedded
+                for m, v in zip(missing, vecs):
+                    await asyncio.to_thread(store.set_embedding, m["id"], v, model)
+                    backfilled += 1
+        diary_id = await self._memory_write_diary()
+        logger.info(
+            f"[desktop_pet] memory daily: decayed={decayed} archived={archived} "
+            f"backfilled={backfilled} diary={diary_id}"
+        )
+
+    async def _memory_write_diary(self):
+        """每日一条「桌宠日记」（kind=diary），以桌宠人格口吻总结昨日对话。"""
+        if not self._memory_diary_enabled():
+            return None
+        store = self._mem_store
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        if await asyncio.to_thread(store.get_meta, "last_diary_date") == yesterday:
+            return None
+        rows = await asyncio.to_thread(store.chat_log_of_date, yesterday)
+        if len(rows) < 4:  # 不足两轮对话不记
+            await asyncio.to_thread(store.set_meta, "last_diary_date", yesterday)
+            return None
+        provider = await self._memory_llm_provider()
+        if provider is None:
+            return None
+        system = await self._pet_persona_prompt() or "你是一只桌面桌宠。"
+        resp = await provider.text_chat(
+            prompt=build_diary_prompt(rows, self._master_name(), yesterday),
+            system_prompt=system,
+        )
+        text = strip_leading_tags(
+            self._split_jp(getattr(resp, "completion_text", "") or "")[0]
+        )
+        if len(text) < 10:
+            return None
+        embedded = await self._memory_embed_texts([text])
+        vec = model = None
+        if embedded:
+            vec, model = embedded[0][0], embedded[1]
+        mid = await asyncio.to_thread(
+            store.add_memory,
+            "diary",
+            f"{yesterday} 的日记：{text}"[:400],
+            3,
+            "diary",
+            vec,
+            model,
+        )
+        await asyncio.to_thread(store.set_meta, "last_diary_date", yesterday)
+        return mid
+
+    async def _pet_persona_prompt(self):
+        """桌宠会话当前人格的 prompt（日记口吻用）。"""
+        try:
+            _cid, conv = await self._pet_conversation()
+            pid = getattr(conv, "persona_id", None) if conv else None
+            mgr = self.context.persona_manager
+            name = pid or getattr(mgr, "default_persona", None)
+            for p in getattr(mgr, "personas_v3", None) or []:
+                n = p.get("name") if isinstance(p, dict) else getattr(p, "name", None)
+                if n == name:
+                    return (
+                        p.get("prompt") if isinstance(p, dict) else getattr(p, "prompt", None)
+                    )
+        except Exception:
+            pass
+        return None
+
+    async def _memory_reembed_all(self):
+        store = self._mem_store
+        if store is None:
+            return
+        try:
+            rows = await asyncio.to_thread(store.all_active_contents, 5000)
+            total = 0
+            for i in range(0, len(rows), 64):
+                batch = rows[i : i + 64]
+                embedded = await self._memory_embed_texts(
+                    [m["content"] for m in batch]
+                )
+                if not embedded:
+                    break
+                vecs, model = embedded
+                for m, v in zip(batch, vecs):
+                    await asyncio.to_thread(store.set_embedding, m["id"], v, model)
+                total += len(batch)
+            await asyncio.to_thread(store.invalidate_index)
+            logger.info(f"[desktop_pet] memory reembed done: {total}/{len(rows)}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[desktop_pet] memory reembed failed: {e}")
+
+    async def _memory_import_livingmemory(self):
+        """从 LivingMemory 库只读导入桌宠会话的存量记忆（身份改写 + 去重 + 嵌入）。"""
+        store = self._mem_store
+        lm_path = (
+            Path(__file__).resolve().parents[2]
+            / "plugin_data"
+            / "astrbot_plugin_livingmemory"
+            / "livingmemory.db"
+        )
+        result = await asyncio.to_thread(
+            store.fetch_livingmemory_candidates,
+            lm_path,
+            self._pet_session_id(),
+            self._master_name() or "主人",
+        )
+        if result.get("error"):
+            return error_response(
+                f"读取 LivingMemory 库失败: {result['error']}", status_code=400
+            )
+        pending = []
+        skipped = 0
+        for it in result.get("items") or []:
+            dup = await asyncio.to_thread(store.find_duplicate, it["content"])
+            if dup is not None:
+                skipped += 1
+            else:
+                pending.append(it)
+        imported = 0
+        for i in range(0, len(pending), 64):
+            batch = pending[i : i + 64]
+            embedded = await self._memory_embed_texts([it["content"] for it in batch])
+            for j, it in enumerate(batch):
+                vec = model = None
+                if embedded:
+                    vec, model = embedded[0][j], embedded[1]
+                await asyncio.to_thread(
+                    store.add_memory,
+                    it["kind"],
+                    it["content"],
+                    it["importance"],
+                    "import",
+                    vec,
+                    model,
+                )
+                imported += 1
+        logger.info(
+            f"[desktop_pet] imported {imported} memories from LivingMemory "
+            f"(skipped {skipped} dups)"
+        )
+        return {
+            "found": result.get("found", 0),
+            "imported": imported,
+            "skipped": skipped,
+        }
+
+    # ---- 控制页后端 ----
+
+    def _memory_summary(self) -> dict:
+        store = self._mem_store
+        if store is None:
+            return {"enabled": self._memory_enabled(), "ready": False}
+        try:
+            prov = self._memory_embed_provider()
+            model = self._memory_embed_model_id(prov) if prov else None
+            dim = None
+            if prov is not None:
+                try:
+                    dim = prov.get_dim()
+                except Exception:
+                    pass
+            return {
+                "enabled": self._memory_enabled(),
+                "ready": True,
+                "vector": prov is not None and store.vector_available,
+                "embedding_provider": model,
+                "embedding_dim": dim,
+                **store.stats(model),
+            }
+        except Exception as e:
+            return {"enabled": self._memory_enabled(), "ready": False, "error": str(e)}
+
+    def _list_embedding_providers(self) -> list[dict]:
+        out = []
+        try:
+            get_all = getattr(self.context, "get_all_embedding_providers", None)
+            for p in (get_all() if get_all else []) or []:
+                try:
+                    dim = None
+                    try:
+                        dim = p.get_dim()
+                    except Exception:
+                        pass
+                    out.append({"id": getattr(p.meta(), "id", "?"), "dim": dim})
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return out
+
+    async def page_memory_config(self):
+        if request.method == "GET":
+            return {
+                "memory_enabled": self._memory_enabled(),
+                "memory_embedding_provider_id": str(
+                    self.config.get("memory_embedding_provider_id") or ""
+                ),
+                "memory_provider_id": str(self.config.get("memory_provider_id") or ""),
+                "memory_reflect_rounds": self._memory_reflect_rounds(),
+                "memory_recall_top_k": self._memory_recall_top_k(),
+                "memory_recall_min_score": self._memory_recall_min_score(),
+                "memory_recall_max_chars": self._memory_recall_max_chars(),
+                "memory_diary_enabled": self._memory_diary_enabled(),
+                "embedding_providers": self._list_embedding_providers(),
+                "llm_providers": [p["id"] for p in self._list_providers()],
+            }
+        payload = await request.json(default={})
+        updated = {}
+        for k in MEMORY_CONFIG_KEYS:
+            if k not in payload:
+                continue
+            v = payload[k]
+            try:
+                if k in ("memory_enabled", "memory_diary_enabled"):
+                    v = bool(v)
+                elif k in (
+                    "memory_reflect_rounds",
+                    "memory_recall_top_k",
+                    "memory_recall_max_chars",
+                ):
+                    v = int(v)
+                elif k == "memory_recall_min_score":
+                    v = float(v)
+                else:
+                    v = str(v).strip()
+            except (TypeError, ValueError):
+                return error_response(f"invalid value for {k}", status_code=400)
+            self.config[k] = v
+            updated[k] = v
+        self._persist_config()
+        return {"saved": True, "updated": updated}
+
+    async def page_memory_query(self):
+        if self._mem_store is None:
+            return error_response("记忆存储未就绪", status_code=500)
+        q, offset, limit = "", 0, 20
+        try:
+            query = getattr(request, "query", None) or {}
+            q = str(query.get("q", "") or "").strip()
+            offset = max(0, int(query.get("offset", 0) or 0))
+            limit = min(100, max(1, int(query.get("limit", 20) or 20)))
+        except (TypeError, ValueError, AttributeError):
+            pass
+        items, total = await asyncio.to_thread(
+            self._mem_store.list_memories, q, offset, limit
+        )
+        return {
+            "summary": self._memory_summary(),
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    async def page_memory_op(self):
+        if self._mem_store is None:
+            return error_response("记忆存储未就绪", status_code=500)
+        payload = await request.json(default={})
+        action = str(payload.get("action") or "").strip()
+        store = self._mem_store
+        if action == "add":
+            content = self._memory_rewrite_identity(
+                str(payload.get("content") or "").strip()
+            )
+            if len(content) < 2:
+                return error_response("content is required", status_code=400)
+            kind = str(payload.get("kind") or "fact").strip()
+            try:
+                importance = int(payload.get("importance", 3))
+            except (TypeError, ValueError):
+                importance = 3
+            dup = await asyncio.to_thread(store.find_duplicate, content)
+            if dup is not None:
+                return {"added": False, "duplicate_of": dup["id"]}
+            embedded = await self._memory_embed_texts([content])
+            vec = model = None
+            if embedded:
+                vec, model = embedded[0][0], embedded[1]
+            mid = await asyncio.to_thread(
+                store.add_memory, kind, content, importance, "manual", vec, model
+            )
+            return {"added": True, "id": mid}
+        if action == "delete":
+            try:
+                mid = int(payload.get("id"))
+            except (TypeError, ValueError):
+                return error_response("id is required", status_code=400)
+            ok = await asyncio.to_thread(store.deactivate, mid)
+            return {"deleted": ok}
+        if action == "set_importance":
+            try:
+                mid = int(payload.get("id"))
+                imp = int(payload.get("importance"))
+            except (TypeError, ValueError):
+                return error_response("id/importance is required", status_code=400)
+            ok = await asyncio.to_thread(store.set_importance, mid, imp)
+            return {"saved": ok}
+        if action == "reflect_now":
+            task = self._mem_reflect_task
+            if task is not None and not task.done():
+                return {"started": False, "reason": "反思任务正在进行中"}
+            self._mem_reflect_task = asyncio.create_task(self._memory_reflect())
+            return {"started": True}
+        if action == "reembed":
+            task = getattr(self, "_mem_reembed_task", None)
+            if task is not None and not task.done():
+                return {"started": False, "reason": "重建任务正在进行中"}
+            self._mem_reembed_task = asyncio.create_task(self._memory_reembed_all())
+            return {"started": True}
+        if action == "import_livingmemory":
+            return await self._memory_import_livingmemory()
+        return error_response(f"unknown action: {action}", status_code=400)
+
+    async def page_memory_recall_test(self):
+        if self._mem_store is None:
+            return error_response("记忆存储未就绪", status_code=500)
+        payload = await request.json(default={})
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return error_response("text is required", status_code=400)
+        result = await self._memory_recall_block(text, dry=True)
+        if not result:
+            return {"block": "", "hits": [], "vector": False}
+        hits = [
+            {
+                "id": h["id"],
+                "kind": h["kind"],
+                "content": h["content"][:80],
+                "cos": h.get("cos"),
+                "score": round(h.get("score", 0.0), 3),
+            }
+            for h in result["hits"]
+        ]
+        return {"block": result["block"], "hits": hits, "vector": result["vector"]}
 
     # ---------- 内部逻辑 ----------
 

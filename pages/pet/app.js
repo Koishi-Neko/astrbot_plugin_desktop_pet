@@ -375,6 +375,209 @@ async function saveAsrConfig() {
   }
 }
 
+// ---------- 内置记忆 ----------
+
+const MEM_KIND_LABELS = { profile: "档案", fact: "事实", event: "事件", mood: "心情", promise: "约定", scene: "观察", diary: "日记" };
+let memoryOffset = 0;
+const MEM_PAGE_LIMIT = 20;
+
+async function loadMemoryConfig() {
+  const cfg = await bridge.apiGet("page/memory_config");
+  $("memory-enabled").checked = !!cfg.memory_enabled;
+  $("memory-diary-enabled").checked = cfg.memory_diary_enabled !== false;
+  $("memory-embed-provider").value = cfg.memory_embedding_provider_id || "";
+  $("memory-llm-provider").value = cfg.memory_provider_id || "";
+  $("memory-reflect-rounds").value = cfg.memory_reflect_rounds ?? 8;
+  $("memory-recall-topk").value = cfg.memory_recall_top_k ?? 5;
+  $("memory-recall-minscore").value = cfg.memory_recall_min_score ?? 0.35;
+  $("memory-recall-maxchars").value = cfg.memory_recall_max_chars ?? 800;
+  const el = $("memory-embed-list");
+  el.innerHTML = "";
+  for (const p of cfg.embedding_providers || []) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.label = p.dim ? `${p.dim} 维` : "";
+    el.appendChild(opt);
+  }
+  const ll = $("memory-llm-list");
+  ll.innerHTML = "";
+  for (const id of cfg.llm_providers || []) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    ll.appendChild(opt);
+  }
+}
+
+function renderMemoryState(s) {
+  const box = $("memory-state");
+  if (!s || s.ready === false) {
+    box.innerHTML = `<span class="bad">● 记忆存储未就绪${s && s.error ? "：" + esc(s.error) : ""}</span>`;
+    return;
+  }
+  if (!s.enabled) {
+    box.innerHTML = `<span class="warn-color">● 内置记忆已停用</span>`;
+    return;
+  }
+  const kindStr = Object.entries(s.by_kind || {}).map(([k, n]) => `${MEM_KIND_LABELS[k] || k} ${n}`).join(" / ");
+  let vecLine;
+  if (s.vector) {
+    vecLine = `<span class="ok">● 向量召回</span>  ${esc(s.embedding_provider || "")}${s.embedding_dim ? ` · ${s.embedding_dim} 维` : ""}` +
+      `  · 覆盖率 ${s.with_embedding}/${s.total_active}` +
+      (s.stale_embedding ? `  <span class="warn-color">（${s.stale_embedding} 条向量待重建）</span>` : "");
+  } else {
+    vecLine = `<span class="warn-color">● 降级召回</span>（无可用嵌入模型，按重要度+时效召回）`;
+  }
+  box.innerHTML =
+    `记忆库：共 ${s.total_active} 条（${kindStr || "暂无"}）\n` +
+    `召回：${vecLine}\n` +
+    `待反思：${s.unreflected_pairs} 轮 · 最近反思：${esc(s.last_reflect_at || "（从未）")} · 最近日记：${esc(s.last_diary_date || "（无）")}`;
+}
+
+async function saveMemoryConfig() {
+  $("btn-save-memory").disabled = true;
+  $("memory-save-msg").textContent = "保存中…";
+  try {
+    await bridge.apiPost("page/memory_config", {
+      memory_enabled: $("memory-enabled").checked,
+      memory_diary_enabled: $("memory-diary-enabled").checked,
+      memory_embedding_provider_id: $("memory-embed-provider").value.trim(),
+      memory_provider_id: $("memory-llm-provider").value.trim(),
+      memory_reflect_rounds: Number($("memory-reflect-rounds").value),
+      memory_recall_top_k: Number($("memory-recall-topk").value),
+      memory_recall_min_score: Number($("memory-recall-minscore").value),
+      memory_recall_max_chars: Number($("memory-recall-maxchars").value),
+    });
+    $("memory-save-msg").textContent = "已保存，即时生效。";
+    queryMemories(false);
+  } catch (e) {
+    $("memory-save-msg").textContent = "保存失败：" + e.message;
+  } finally {
+    $("btn-save-memory").disabled = false;
+    setTimeout(() => ($("memory-save-msg").textContent = ""), 4000);
+  }
+}
+
+async function queryMemories(reset) {
+  if (reset) memoryOffset = 0;
+  const q = encodeURIComponent($("memory-search").value.trim());
+  try {
+    const r = await bridge.apiGet(`page/memory_query?q=${q}&offset=${memoryOffset}&limit=${MEM_PAGE_LIMIT}`);
+    renderMemoryState(r.summary);
+    const list = $("memory-list");
+    const items = r.items || [];
+    if (!items.length) {
+      list.textContent = "（空）";
+    } else {
+      list.innerHTML = "";
+      for (const m of items) {
+        const row = document.createElement("div");
+        row.className = "mem-row";
+        const content = document.createElement("span");
+        content.className = "mem-content";
+        content.textContent = `[${String(m.created_at || "").slice(0, 10)}·${MEM_KIND_LABELS[m.kind] || m.kind}] ${m.content}`;
+        row.appendChild(content);
+        const sel = document.createElement("select");
+        for (let i = 1; i <= 5; i++) {
+          const opt = document.createElement("option");
+          opt.value = String(i);
+          opt.textContent = `重要度 ${i}`;
+          sel.appendChild(opt);
+        }
+        sel.value = String(m.importance);
+        sel.addEventListener("change", async () => {
+          await bridge.apiPost("page/memory_op", { action: "set_importance", id: m.id, importance: Number(sel.value) });
+        });
+        row.appendChild(sel);
+        const del = document.createElement("button");
+        del.className = "btn small";
+        del.textContent = "删除";
+        del.addEventListener("click", async () => {
+          await bridge.apiPost("page/memory_op", { action: "delete", id: m.id });
+          queryMemories(false);
+        });
+        row.appendChild(del);
+        list.appendChild(row);
+      }
+    }
+    const total = r.total || 0;
+    const page = Math.floor(memoryOffset / MEM_PAGE_LIMIT) + 1;
+    const pages = Math.max(1, Math.ceil(total / MEM_PAGE_LIMIT));
+    $("memory-page-info").textContent = `第 ${page}/${pages} 页 · 共 ${total} 条`;
+    $("btn-memory-prev").disabled = memoryOffset <= 0;
+    $("btn-memory-next").disabled = memoryOffset + MEM_PAGE_LIMIT >= total;
+  } catch (e) {
+    $("memory-list").textContent = "查询失败：" + e.message;
+  }
+}
+
+async function memoryOp(action, extra, btn) {
+  if (btn) btn.disabled = true;
+  const msg = $("memory-op-msg");
+  msg.textContent = "执行中…";
+  try {
+    const r = await bridge.apiPost("page/memory_op", { action, ...(extra || {}) });
+    if (action === "import_livingmemory") {
+      msg.textContent = `导入完成：库中匹配 ${r.found} 条，新增 ${r.imported} 条，去重跳过 ${r.skipped} 条。`;
+    } else if (action === "reflect_now" || action === "reembed") {
+      msg.textContent = r.started ? "任务已开始，稍后点「刷新」看结果。" : `未开始：${r.reason || ""}`;
+    } else {
+      msg.textContent = "完成。";
+    }
+    queryMemories(false);
+  } catch (e) {
+    msg.textContent = "失败：" + e.message;
+  } finally {
+    if (btn) btn.disabled = false;
+    setTimeout(() => (msg.textContent = ""), 8000);
+  }
+}
+
+async function testMemoryRecall() {
+  const box = $("memory-test-result");
+  $("btn-memory-test").disabled = true;
+  box.classList.remove("hidden");
+  box.textContent = "召回中…";
+  try {
+    const r = await bridge.apiPost("page/memory_recall_test", { text: $("memory-test-text").value });
+    const lines = (r.hits || []).map(
+      (h) => `- [${MEM_KIND_LABELS[h.kind] || h.kind}]${h.cos != null ? ` cos=${h.cos}` : ""} score=${h.score}  ${h.content}`
+    );
+    box.textContent =
+      `召回方式：${r.vector ? "向量" : "降级（重要度+时效）"}\n` +
+      (lines.length ? lines.join("\n") : "（无命中）") +
+      (r.block ? `\n\n—— 实际注入块 ——\n${r.block}` : "");
+  } catch (e) {
+    box.textContent = "召回失败：" + e.message;
+  } finally {
+    $("btn-memory-test").disabled = false;
+  }
+}
+
+async function addMemory() {
+  const msg = $("memory-add-msg");
+  $("btn-memory-add").disabled = true;
+  try {
+    const r = await bridge.apiPost("page/memory_op", {
+      action: "add",
+      content: $("memory-add-content").value.trim(),
+      kind: $("memory-add-kind").value,
+      importance: Number($("memory-add-importance").value),
+    });
+    if (r.added) {
+      msg.textContent = `已添加（#${r.id}）。`;
+      $("memory-add-content").value = "";
+      queryMemories(true);
+    } else {
+      msg.textContent = `与既有记忆 #${r.duplicate_of} 重复，未添加。`;
+    }
+  } catch (e) {
+    msg.textContent = "添加失败：" + e.message;
+  } finally {
+    $("btn-memory-add").disabled = false;
+    setTimeout(() => ($("memory-add-msg").textContent = ""), 5000);
+  }
+}
+
 // ---------- 试听 ----------
 
 async function testTts() {
@@ -408,6 +611,16 @@ $("btn-save-scene").addEventListener("click", saveSceneConfig);
 $("btn-save-asr").addEventListener("click", saveAsrConfig);
 $("btn-save").addEventListener("click", saveConfig);
 $("btn-test").addEventListener("click", testTts);
+$("btn-memory-refresh").addEventListener("click", () => { loadMemoryConfig(); queryMemories(false); });
+$("btn-save-memory").addEventListener("click", saveMemoryConfig);
+$("btn-memory-import").addEventListener("click", (e) => memoryOp("import_livingmemory", {}, e.target));
+$("btn-memory-reflect").addEventListener("click", (e) => memoryOp("reflect_now", {}, e.target));
+$("btn-memory-reembed").addEventListener("click", (e) => memoryOp("reembed", {}, e.target));
+$("btn-memory-test").addEventListener("click", testMemoryRecall);
+$("btn-memory-search").addEventListener("click", () => queryMemories(true));
+$("btn-memory-prev").addEventListener("click", () => { memoryOffset = Math.max(0, memoryOffset - MEM_PAGE_LIMIT); queryMemories(false); });
+$("btn-memory-next").addEventListener("click", () => { memoryOffset += MEM_PAGE_LIMIT; queryMemories(false); });
+$("btn-memory-add").addEventListener("click", addMemory);
 $("tts-model").addEventListener("change", () => {
   // 切换模型时说话人/风格跟随新模型，默认值用其第一个
   const m = (modelsInfo || {})[$("tts-model").value];
@@ -421,6 +634,6 @@ $("tts-length").addEventListener("input", () => {
 $("scene-provider").addEventListener("input", updateSceneProviderHint);
 
 await loadConfig();
-await Promise.all([refreshStatus(), loadTokenStats(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadAsrConfig(), loadPersonaConfig()]);
+await Promise.all([refreshStatus(), loadTokenStats(), loadModels(), loadMasterConfig(), loadSceneConfig(), loadAsrConfig(), loadPersonaConfig(), loadMemoryConfig(), queryMemories(true)]);
 // 配置里的 style/speaker 选中值在模型列表加载后应用一次
 onModelChange();

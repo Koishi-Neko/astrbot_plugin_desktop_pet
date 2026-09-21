@@ -31,7 +31,7 @@ A Live2D companion living right on your Windows desktop. We give you two ways to
 | | AstrBot Mode (The Full Experience) | Standalone Mode (Lightweight & Lazy) |
 | --- | --- | --- |
 | The Brain | AstrBot (via webchat pipeline) | Any OpenAI-compatible LLM (Cloud API / local Ollama) |
-| Persona & History | Session-level persona + platform history. Want long-term memory? Just install LivingMemory. | Toss a persona prompt in the settings panel. Remembers the current session. |
+| Persona & History | Session-level persona + platform history, plus built-in long-term memory (vector recall + reflection) | Toss a persona prompt in the settings panel. Remembers the current session. |
 | Japanese Voice | SBV2 synthesis, sentence-by-sentence playback + lip sync | Same deal (just give it a TTS URL) |
 | Setup Required | Get AstrBot running (Docker / native) | Literally nothing, up and running in 5 minutes |
 
@@ -40,6 +40,7 @@ A Live2D companion living right on your Windows desktop. We give you two ways to
 - **Typewriter Bubble + Input Box**: If the reply has an [emotion] tag, the expression automatically changes. Chinese text bubbles, plus optional Japanese sentence-by-sentence dubbing if you're into that.
 - **Voice Input**: Hit the mic icon on the input bar, speak → local ASR (whisper @ Intel NPU) transcribes it → auto-sends. Save your keystrokes. Switches and server addresses are configurable in the control page.
 - **Proactive Chat**: Nags you to sleep late at night, welcomes you back if you step away, and reminds you to stretch if you've been sitting too long. It also subtly peeks at your desktop and comments on interesting stuff (don't worry, there's a blocklist—WeChat, QQ, and Office are ignored by default).
+- **Built-in Long-term Memory** (AstrBot mode): The pet remembers things on its own—no extra memory plugin needed. An LLM periodically reflects chats into memories, recalls them by vector similarity when relevant, and writes a little pet diary every night. You can browse, edit, and test recall on the control page, and if you were using LivingMemory before, there's a one-click import for your old memories.
 - **WebUI Control Page**: If you're running AstrBot mode, all the server-side configs have a slick GUI. Save and it takes effect instantly.
 
 ## Quick Start
@@ -73,7 +74,7 @@ All the fancy server-side tweaks (TTS, proactive chat, scene awareness, master i
 ## Standalone Mode
 <a id="standalone-mode"></a>
 
-Too lazy to deploy AstrBot? The pet can fly solo: **Settings Panel → Operating Mode → Standalone Mode**. It bypasses AstrBot entirely and hooks directly into any OpenAI-compatible API (like DeepSeek / Kimi in the cloud, or a local Ollama). Chatting, expression changes, Japanese dubbing, proactive chat, and scene awareness all work perfectly. The only trade-off? **It has gold-fish memory** (no long-term memory like the LivingMemory plugin, it only remembers the current session).
+Too lazy to deploy AstrBot? The pet can fly solo: **Settings Panel → Operating Mode → Standalone Mode**. It bypasses AstrBot entirely and hooks directly into any OpenAI-compatible API (like DeepSeek / Kimi in the cloud, or a local Ollama). Chatting, expression changes, Japanese dubbing, proactive chat, and scene awareness all work perfectly. The only trade-off? **It has gold-fish memory** (long-term memory is a built-in plugin ability in AstrBot mode; standalone only remembers the current session).
 
 | Capability | AstrBot Mode | Standalone Mode |
 | --- | --- | --- |
@@ -82,7 +83,7 @@ Too lazy to deploy AstrBot? The pet can fly solo: **Settings Panel → Operating
 | Voice Input (Requires local ASR service) | ✅ (Configure switch/URL in Control Page) | ✅ (Defaults to 15055, tweakable in config.local.json) |
 | Proactive Chat / Scene Awareness | ✅ | ✅ (Screenshots sent inline; vision model = chat model or manually specified) |
 | Session Persona | WebUI Control Page | Direct text in Settings Panel "Persona" (leave blank for built-in default) |
-| Long-term Memory (LivingMemory) | ✅ (via optional plugin) | ❌ (Not in V1, sorry) |
+| Long-term Memory | ✅ (Built into the plugin: vector recall + reflection + diary) | ❌ (Not in V1, sorry) |
 | Where's the config? | WebUI Control Page | Settings Panel / `config.local.json` |
 | Status Dashboard | ✅ | ❌ |
 
@@ -214,7 +215,7 @@ If you want to bake in some config for users, drop a `config.local.json` in `pet
 
 - **The pet is playing dead (AstrBot mode)**: Open the settings panel and click "Test connection" to see which check fails. Look at your AstrBot logs for `[desktop_pet] web api registered`. Did you give your API Key both plugin and chat scopes? (Add the file scope too if you want scene awareness).
 - **The pet is playing dead (Standalone mode)**: Switch to standalone in settings and click "Test connection". Make sure your base URL ends in `/v1` (it tries to auto-complete bare roots, but play it safe). If you're on local Ollama, the API Key field can't be empty—just type anything.
-- **Standalone mode has goldfish memory**: Yep, that's by design in V1 (it remembers the current session, though). If you want long-term memory, go use AstrBot mode with the LivingMemory plugin.
+- **Standalone mode has goldfish memory**: Yep, that's by design in V1 (it remembers the current session, though). If you want long-term memory, go back to AstrBot mode—the plugin has its own built-in long-term memory there, no extra memory plugin needed.
 - **Live2D isn't rendering (Source build)**: Go check if the three js files exist under `src/vendor/` (run `npm run setup`). Also, if your model path has non-ASCII characters, or it isn't a Cubism 3/4 model, it's gonna fail to load.
 - **It's a mute (No Voice)**: Check three things: Is the TTS switch on in the control page? Is SBV2 "reachable"? Did you pick a model/speaker? Oh, and make sure the "Voice" toggle in the pet shell settings is actually on. (For standalone, check the TTS URL in settings).
 - **Mic button is grey / does nothing**: Did you turn on the voice-input switch in the control page? Is the ASR service actually running? (First boot takes ~4 mins; run `start_asr.vbs` to wake it up. Hover over the button to see what it's complaining about).

@@ -130,5 +130,61 @@
         "type": "string",
         "default": "http://127.0.0.1:15055",
         "invisible": true
+    },
+    "memory_enabled": {
+        "description": "启用内置长期记忆",
+        "hint": "开启后桌宠会话拥有插件自带的长期记忆（向量召回 + LLM 反思抽取），不依赖 LivingMemory。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+    },
+    "memory_embedding_provider_id": {
+        "description": "记忆向量嵌入模型 provider",
+        "hint": "用于记忆召回的 embedding provider id。留空则自动取首个已配置的 embedding provider；无可用 provider 时记忆自动降级为重要度+时效召回。",
+        "type": "string",
+        "default": "",
+        "invisible": true
+    },
+    "memory_provider_id": {
+        "description": "记忆反思 LLM provider",
+        "hint": "反思抽取与每日日记使用的 LLM provider id，留空则跟随桌宠会话当前模型。",
+        "type": "string",
+        "default": "",
+        "invisible": true
+    },
+    "memory_reflect_rounds": {
+        "description": "记忆反思触发轮数",
+        "hint": "每积攒多少轮对话进行一次记忆反思抽取。",
+        "type": "int",
+        "default": 8,
+        "invisible": true
+    },
+    "memory_recall_top_k": {
+        "description": "记忆召回条数",
+        "hint": "每次对话最多注入多少条相关记忆（档案类常驻记忆不计入）。",
+        "type": "int",
+        "default": 5,
+        "invisible": true
+    },
+    "memory_recall_min_score": {
+        "description": "记忆召回最低相似度",
+        "hint": "向量召回的余弦相似度阈值，低于该值的记忆不注入。调低召回更多但可能不相关，调高更严格。",
+        "type": "float",
+        "default": 0.35,
+        "invisible": true
+    },
+    "memory_recall_max_chars": {
+        "description": "记忆注入长度预算",
+        "hint": "单次注入的记忆块最大字符数。",
+        "type": "int",
+        "default": 800,
+        "invisible": true
+    },
+    "memory_diary_enabled": {
+        "description": "每日桌宠日记",
+        "hint": "开启后每天凌晨按昨日对话生成一条桌宠第一人称日记记忆。",
+        "type": "bool",
+        "default": true,
+        "invisible": true
     }
 }

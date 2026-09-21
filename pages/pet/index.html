@@ -86,6 +86,102 @@
       </section>
 
       <section class="card">
+        <div class="card-title">
+          内置记忆
+          <button id="btn-memory-refresh" class="btn small">刷新</button>
+        </div>
+        <div class="warn">桌宠会话的插件自带长期记忆（向量召回 + LLM 反思），不依赖 LivingMemory。无嵌入模型时自动降级为重要度+时效召回。</div>
+        <div id="memory-state" class="kv">加载中…</div>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-enabled" />
+          <span>启用内置长期记忆</span>
+        </label>
+        <label class="row checkbox-row">
+          <input type="checkbox" id="memory-diary-enabled" />
+          <span>每日桌宠日记（凌晨按昨日对话生成一条日记记忆）</span>
+        </label>
+        <label class="row">
+          <span class="label">嵌入模型 provider</span>
+          <input type="text" id="memory-embed-provider" list="memory-embed-list" placeholder="留空则自动取首个可用" spellcheck="false" />
+          <datalist id="memory-embed-list"></datalist>
+        </label>
+        <label class="row">
+          <span class="label">反思 LLM provider</span>
+          <input type="text" id="memory-llm-provider" list="memory-llm-list" placeholder="留空则跟随会话当前模型" spellcheck="false" />
+          <datalist id="memory-llm-list"></datalist>
+        </label>
+        <label class="row">
+          <span class="label">反思触发轮数</span>
+          <input type="text" id="memory-reflect-rounds" spellcheck="false" />
+        </label>
+        <label class="row">
+          <span class="label">召回条数 top_k</span>
+          <input type="text" id="memory-recall-topk" spellcheck="false" />
+        </label>
+        <label class="row">
+          <span class="label">召回最低相似度</span>
+          <input type="text" id="memory-recall-minscore" spellcheck="false" />
+        </label>
+        <label class="row">
+          <span class="label">注入长度预算(字)</span>
+          <input type="text" id="memory-recall-maxchars" spellcheck="false" />
+        </label>
+        <div class="row buttons">
+          <button id="btn-save-memory" class="btn primary">保存配置</button>
+          <span id="memory-save-msg" class="msg"></span>
+        </div>
+        <div class="row buttons">
+          <button id="btn-memory-import" class="btn">从 LivingMemory 导入</button>
+          <button id="btn-memory-reflect" class="btn">立即反思</button>
+          <button id="btn-memory-reembed" class="btn">重建向量</button>
+          <span id="memory-op-msg" class="msg"></span>
+        </div>
+        <label class="row">
+          <span class="label">召回测试</span>
+          <input type="text" id="memory-test-text" placeholder="输入一句话，看实际会注入哪些记忆" />
+        </label>
+        <div class="row buttons">
+          <button id="btn-memory-test" class="btn">测试召回</button>
+        </div>
+        <div id="memory-test-result" class="kv hidden"></div>
+        <label class="row">
+          <span class="label">浏览 / 搜索</span>
+          <input type="text" id="memory-search" placeholder="按内容子串过滤，留空列全部" />
+        </label>
+        <div class="row buttons">
+          <button id="btn-memory-search" class="btn">查询</button>
+          <button id="btn-memory-prev" class="btn small">上一页</button>
+          <button id="btn-memory-next" class="btn small">下一页</button>
+          <span id="memory-page-info" class="msg"></span>
+        </div>
+        <div id="memory-list" class="kv">（空）</div>
+        <label class="row">
+          <span class="label">手动添加</span>
+          <input type="text" id="memory-add-content" placeholder="想让桌宠记住的事，如：主人不喝碳酸饮料" />
+        </label>
+        <label class="row">
+          <span class="label">类别 / 重要度</span>
+          <select id="memory-add-kind">
+            <option value="profile">档案</option>
+            <option value="fact" selected>事实</option>
+            <option value="event">事件</option>
+            <option value="mood">心情</option>
+            <option value="promise">约定</option>
+            <option value="scene">观察</option>
+          </select>
+          <select id="memory-add-importance">
+            <option value="1">1 琐事</option>
+            <option value="2">2</option>
+            <option value="3" selected>3 普通</option>
+            <option value="4">4</option>
+            <option value="5">5 极重要</option>
+          </select>
+          <button id="btn-memory-add" class="btn">添加</button>
+          <span id="memory-add-msg" class="msg"></span>
+        </label>
+      </section>
+
+      <section class="card">
         <div class="card-title">主动对话 / 桌面感知动态</div>
         <div id="pet-report" class="kv">加载中…</div>
       </section>

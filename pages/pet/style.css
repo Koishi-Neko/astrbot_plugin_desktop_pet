@@ -65,6 +65,9 @@ input[type="range"] { flex: 1; max-width: 300px; }
 .warn { font-size: 12px; color: #c07b00; margin: 4px 0; }
 .mono { font-family: Consolas, monospace; font-size: 13px; width: 40px; }
 .hidden { display: none; }
+.mem-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.mem-content { flex: 1; min-width: 240px; white-space: pre-wrap; word-break: break-all; }
+.mem-row select { max-width: 110px; flex: none; }
 audio { width: 100%; margin-top: 8px; }
 textarea {
   flex: 1;
