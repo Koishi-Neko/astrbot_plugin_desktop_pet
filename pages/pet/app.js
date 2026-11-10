@@ -198,15 +198,19 @@ async function refreshStatus() {
 
 // ---------- 总览：Token 消耗统计 ----------
 
+function tokenPercent(d) {
+  const input = Number(d.input || 0);
+  const cached = Number(d.cached || 0);
+  return input > 0 ? Math.min(100, Math.round((cached / input) * 100)) : 0;
+}
+
 function tokenRow(title, d) {
   const wrap = document.createElement("div");
   wrap.className = "token-row";
-  const input = d.input || 0;
-  const cached = d.cached || 0;
-  const pct = input > 0 ? Math.min(100, Math.round((cached / input) * 100)) : 0;
+  const pct = tokenPercent(d);
   wrap.innerHTML =
     `<div class="token-line"><span class="token-title">${esc(title)}</span>` +
-    `输入 ${fmtNum(input)}（其中命中缓存 ${fmtNum(cached)}）· 输出 ${fmtNum(d.output)} · 平均首字响应 ${d.ttft_avg ?? 0}s</div>` +
+    `输入 ${fmtNum(d.input)}（其中命中缓存 ${fmtNum(d.cached)}）· 输出 ${fmtNum(d.output)} · 平均首字响应 ${d.ttft_avg ?? 0}s</div>` +
     `<div class="token-bar-row"><div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>` +
     `<span class="token-pct">缓存命中率 ${pct}%</span></div>`;
   return wrap;
@@ -737,15 +741,31 @@ async function queryMemories(reset) {
         }
         sel.value = String(m.importance);
         sel.addEventListener("change", async () => {
-          await bridge.apiPost("page/memory_op", { action: "set_importance", id: m.id, importance: Number(sel.value) });
+          try {
+            await bridge.apiPost("page/memory_op", { action: "set_importance", id: m.id, importance: Number(sel.value) });
+            loadMemoryGraph();
+          } catch (e) {
+            sel.value = String(m.importance);
+            $("memory-page-info").textContent = "重要度修改失败：" + e.message;
+          }
         });
         row.appendChild(sel);
         const del = document.createElement("button");
         del.className = "btn small";
         del.textContent = "删除";
         del.addEventListener("click", async () => {
-          await bridge.apiPost("page/memory_op", { action: "delete", id: m.id });
-          queryMemories(false);
+          if (!window.confirm(`确定删除这条记忆吗？\n${m.content.slice(0, 100)}`)) return;
+          del.disabled = true;
+          try {
+            await bridge.apiPost("page/memory_op", { action: "delete", id: m.id });
+            if (items.length === 1 && memoryOffset > 0) memoryOffset -= MEM_PAGE_LIMIT;
+            await queryMemories(false);
+            loadMemoryGraph();
+          } catch (e) {
+            $("memory-page-info").textContent = "删除失败：" + e.message;
+          } finally {
+            del.disabled = false;
+          }
         });
         row.appendChild(del);
         list.appendChild(row);
@@ -824,6 +844,7 @@ async function addMemory() {
       msg.textContent = `已添加（#${r.id}）。`;
       $("memory-add-content").value = "";
       queryMemories(true);
+      loadMemoryGraph();
     } else {
       msg.textContent = `与既有记忆 #${r.duplicate_of} 重复，未添加。`;
     }
@@ -838,11 +859,46 @@ async function addMemory() {
 // ---------- 记忆图谱（canvas 力导向图：节点斥力 + 边弹簧 + 速度阻尼） ----------
 
 const GRAPH_MAX_NODES = 400;
-const graph = { nodes: [], edges: [], loaded: false, raf: 0, drag: null, hover: null, settle: 0 };
+const graph = {
+  nodes: [], edges: [], raw: null, loaded: false, raf: 0,
+  drag: null, dragMoved: false, hover: null, selected: null, settle: 0,
+  scope: "all",
+};
 
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
+}
+
+function selectGraphData(g, scope) {
+  let nodes = [...(g.nodes || [])];
+  if (scope !== "all") nodes = nodes.filter((n) => (n.scope || "pet") === scope);
+  const truncated = nodes.length > GRAPH_MAX_NODES;
+  if (truncated) {
+    nodes = nodes.sort((a, b) => (b.importance || 3) - (a.importance || 3)).slice(0, GRAPH_MAX_NODES);
+  }
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = (g.edges || []).filter((e) => ids.has(e.a) && ids.has(e.b));
+  return { nodes, edges, truncated };
+}
+
+function graphScopeCenters(nodes, w, h) {
+  const scopes = ["pet", "private", "group"].filter((s) => nodes.some((n) => (n.scope || "pet") === s));
+  const centers = {};
+  scopes.forEach((s, i) => {
+    centers[s] = { x: ((i + 1) * w) / (scopes.length + 1), y: h / 2 };
+  });
+  return centers;
+}
+
+function updateGraphTargets() {
+  const canvas = $("memory-graph");
+  const centers = graphScopeCenters(graph.nodes, canvas.clientWidth || 600, canvas.clientHeight || 420);
+  for (const n of graph.nodes) {
+    const c = centers[n.scope] || centers.pet;
+    n.tx = c.x;
+    n.ty = c.y;
+  }
 }
 
 async function loadMemoryGraph() {
@@ -852,19 +908,9 @@ async function loadMemoryGraph() {
   graph.loaded = false;
   try {
     const g = await bridge.apiGet("page/memory_graph");
-    const nodes = g.nodes || [];
-    if (!nodes.length) {
-      // nodes 为空：按 reason 显示提示
-      graph.nodes = [];
-      graph.edges = [];
-      const { ctx, w, h } = fitCanvas($("memory-graph"));
-      ctx.clearRect(0, 0, w, h);
-      hint.textContent = g.reason || "暂无可展示的记忆节点";
-      hint.classList.remove("hidden");
-      return;
-    }
+    graph.raw = g;
     const truncated = initGraph(g);
-    // vector:false 但带节点（索引不可用）：仅画节点、无边，并附原因说明
+    if (!graph.loaded) return;
     const notes = [];
     if (truncated) notes.push(`节点较多，仅展示重要度最高的 ${GRAPH_MAX_NODES} 个`);
     if (!g.vector) notes.push(g.reason || "向量索引不可用，仅显示节点");
@@ -880,55 +926,69 @@ async function loadMemoryGraph() {
 
 function initGraph(g) {
   const canvas = $("memory-graph");
-  const { w, h } = fitCanvas(canvas);
-  let nodes = g.nodes || [];
-  let truncated = false;
-  if (nodes.length > GRAPH_MAX_NODES) {
-    // 节点过多时 O(n²) 斥力会卡，按重要度截取并明示
-    nodes = [...nodes].sort((a, b) => (b.importance || 3) - (a.importance || 3)).slice(0, GRAPH_MAX_NODES);
-    truncated = true;
+  const { ctx, w, h } = fitCanvas(canvas);
+  const selected = selectGraphData(g, graph.scope);
+  if (!selected.nodes.length) {
+    graph.nodes = [];
+    graph.edges = [];
+    graph.loaded = false;
+    graph.selected = null;
+    ctx.clearRect(0, 0, w, h);
+    $("graph-stats").textContent = "0 节点 · 0 关系";
+    $("graph-hint").textContent = "当前范围暂无可展示的记忆节点";
+    $("graph-hint").classList.remove("hidden");
+    return selected.truncated;
   }
+
   const idxById = new Map();
-  const cx = w / 2, cy = h / 2;
-  graph.nodes = nodes.map((n, i) => {
+  const counts = {};
+  const centers = graphScopeCenters(selected.nodes, w, h);
+  graph.nodes = selected.nodes.map((n, i) => {
     idxById.set(n.id, i);
-    // 黄金角螺旋初始布点，开局分布均匀、收敛快
-    const ang = i * 2.399963;
-    const rad = 12 * Math.sqrt(i + 1);
+    const scope = n.scope || "pet";
+    const localIndex = counts[scope] || 0;
+    counts[scope] = localIndex + 1;
+    const c = centers[scope];
+    const ang = localIndex * 2.399963;
+    const rad = 14 * Math.sqrt(localIndex + 1);
     return {
       id: n.id,
+      index: i,
       kind: n.kind,
-      scope: n.scope || "pet",
+      scope,
       importance: n.importance || 3,
       content: n.content || "",
       created_at: n.created_at || "",
-      x: cx + rad * Math.cos(ang),
-      y: cy + rad * Math.sin(ang),
+      x: c.x + rad * Math.cos(ang),
+      y: c.y + rad * Math.sin(ang),
+      tx: c.x,
+      ty: c.y,
       vx: 0,
       vy: 0,
-      r: 3 + (n.importance || 3) * 1.5, // 半径随重要度 1-5 递增
+      r: 4 + (n.importance || 3) * 1.4,
     };
   });
-  graph.edges = (g.edges || [])
-    .map((e) => ({ a: idxById.get(e.a), b: idxById.get(e.b), w: e.w || 1 }))
+  graph.edges = selected.edges
+    .map((e) => ({ a: idxById.get(e.a), b: idxById.get(e.b), w: Math.max(0.2, Number(e.w) || 0.5) }))
     .filter((e) => e.a !== undefined && e.b !== undefined && e.a !== e.b);
   graph.drag = null;
   graph.hover = null;
+  graph.selected = null;
   graph.settle = 0;
   graph.loaded = true;
-  for (let i = 0; i < 80; i++) tickGraph(); // 预跑若干步，避免开局炸开
+  $("graph-stats").textContent = `${graph.nodes.length} 节点 · ${graph.edges.length} 关系`;
+  for (let i = 0; i < 120; i++) tickGraph();
   drawGraph();
   startGraphLoop();
-  return truncated;
+  return selected.truncated;
 }
 
 function tickGraph() {
   const nodes = graph.nodes;
   const canvas = $("memory-graph");
   const w = canvas.clientWidth || 600;
-  const h = canvas.clientHeight || 320;
+  const h = canvas.clientHeight || 420;
 
-  // 节点斥力（全对，O(n²)）
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i];
     for (let j = i + 1; j < nodes.length; j++) {
@@ -942,7 +1002,9 @@ function tickGraph() {
         d2 = 1;
       }
       const d = Math.sqrt(d2);
-      const f = Math.min(2.5, 2600 / d2);
+      const minDist = a.r + b.r + 8;
+      let f = Math.min(2.5, 2200 / d2);
+      if (d < minDist) f = Math.max(f, (minDist - d) * 0.12);
       const fx = (dx / d) * f;
       const fy = (dy / d) * f;
       a.vx += fx; a.vy += fy;
@@ -950,22 +1012,20 @@ function tickGraph() {
     }
   }
 
-  // 边弹簧：边权越大，目标距离越短、拉力越强
   for (const e of graph.edges) {
     const a = nodes[e.a];
     const b = nodes[e.b];
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const d = Math.max(1, Math.hypot(dx, dy));
-    const rest = 42 + 30 / Math.max(0.2, e.w);
-    const f = (d - rest) * 0.015 * Math.min(2, e.w);
+    const rest = 54 + 30 / Math.max(0.2, e.w);
+    const f = (d - rest) * 0.012 * Math.min(2, e.w);
     const fx = (dx / d) * f;
     const fy = (dy / d) * f;
     a.vx += fx; a.vy += fy;
     b.vx -= fx; b.vy -= fy;
   }
 
-  // 弱向心力 + 速度阻尼 + 边界约束
   const cx = w / 2, cy = h / 2;
   for (const n of nodes) {
     if (graph.drag === n) {
@@ -973,13 +1033,13 @@ function tickGraph() {
       n.vy = 0;
       continue;
     }
-    n.vx += (cx - n.x) * 0.004;
-    n.vy += (cy - n.y) * 0.004;
-    n.vx *= 0.86;
-    n.vy *= 0.86;
+    n.vx += ((n.tx ?? cx) - n.x) * 0.007;
+    n.vy += ((n.ty ?? cy) - n.y) * 0.007;
+    n.vx *= 0.84;
+    n.vy *= 0.84;
     n.x += n.vx;
     n.y += n.vy;
-    const m = n.r + 4;
+    const m = n.r + 8;
     if (n.x < m) n.x = m;
     if (n.x > w - m) n.x = w - m;
     if (n.y < m) n.y = m;
@@ -993,12 +1053,24 @@ function drawGraph() {
   const { ctx, w, h } = fitCanvas(canvas);
   ctx.clearRect(0, 0, w, h);
 
+  const active = graph.hover || graph.selected;
+  const neighbors = new Set();
+  if (active) {
+    for (const e of graph.edges) {
+      if (e.a === active.index) neighbors.add(e.b);
+      if (e.b === active.index) neighbors.add(e.a);
+    }
+  }
+
   ctx.strokeStyle = cssVar("--graph-edge", "rgba(120,130,140,.3)");
   for (const e of graph.edges) {
     const a = graph.nodes[e.a];
     const b = graph.nodes[e.b];
-    ctx.globalAlpha = Math.min(0.9, 0.15 + e.w * 0.12);
-    ctx.lineWidth = Math.min(2.5, 0.5 + e.w * 0.3);
+    const related = active && (e.a === active.index || e.b === active.index);
+    ctx.globalAlpha = active
+      ? (related ? Math.min(0.85, 0.35 + e.w * 0.35) : 0.025)
+      : Math.min(0.38, 0.12 + e.w * 0.18);
+    ctx.lineWidth = related ? 1 + e.w * 0.5 : 0.35 + e.w * 0.25;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -1006,21 +1078,33 @@ function drawGraph() {
   }
   ctx.globalAlpha = 1;
 
+  const centers = graphScopeCenters(graph.nodes, w, h);
+  ctx.fillStyle = cssVar("--dim", "#6f7a88");
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  for (const [scope, c] of Object.entries(centers)) {
+    const count = graph.nodes.filter((n) => n.scope === scope).length;
+    ctx.fillText(`${MEM_SCOPE_LABELS[scope] || scope} ${count}`, c.x, 22);
+  }
+
   const colors = {
     pet: cssVar("--graph-pet", "#35a08c"),
     private: cssVar("--graph-private", "#6f97d6"),
     group: cssVar("--graph-group", "#d9a441"),
   };
   for (const n of graph.nodes) {
+    const related = !active || n === active || neighbors.has(n.index);
     ctx.beginPath();
     ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
     ctx.fillStyle = colors[n.scope] || colors.pet;
-    ctx.globalAlpha = graph.hover === n ? 1 : 0.88;
+    ctx.globalAlpha = active ? (related ? 0.96 : 0.12) : 0.86;
     ctx.fill();
-    if (graph.hover === n) {
+    if (graph.selected === n || graph.hover === n) {
       ctx.globalAlpha = 1;
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = cssVar("--text", "#333");
+      ctx.lineWidth = graph.selected === n ? 2.5 : 1.5;
+      ctx.strokeStyle = graph.selected === n
+        ? cssVar("--primary", "#35a08c")
+        : cssVar("--text", "#333");
       ctx.stroke();
     }
   }
@@ -1108,14 +1192,23 @@ function bindGraphEvents() {
   const canvas = $("memory-graph");
   canvas.addEventListener("pointerdown", (e) => {
     if (!graph.loaded) return;
-    const n = nodeAt(graphPos(e));
+    const p = graphPos(e);
+    const n = nodeAt(p);
     if (n) {
       graph.drag = n;
+      graph.dragMoved = false;
+      graph.dragOrigin = { x: e.clientX, y: e.clientY };
       graph.hover = null;
+      graph.selected = null;
       hideGraphTooltip();
       startGraphLoop();
       canvas.setPointerCapture(e.pointerId);
       e.preventDefault();
+    } else {
+      graph.selected = null;
+      graph.hover = null;
+      hideGraphTooltip();
+      drawGraph();
     }
   });
   canvas.addEventListener("pointermove", (e) => {
@@ -1123,6 +1216,9 @@ function bindGraphEvents() {
     const p = graphPos(e);
     if (graph.drag) {
       const rect = canvas.getBoundingClientRect();
+      if (Math.hypot(e.clientX - graph.dragOrigin.x, e.clientY - graph.dragOrigin.y) > 3) {
+        graph.dragMoved = true;
+      }
       graph.drag.x = Math.min(Math.max(p.x, graph.drag.r), rect.width - graph.drag.r);
       graph.drag.y = Math.min(Math.max(p.y, graph.drag.r), rect.height - graph.drag.r);
       graph.drag.vx = 0;
@@ -1134,6 +1230,7 @@ function bindGraphEvents() {
     if (n !== graph.hover) {
       graph.hover = n;
       if (n) showGraphTooltip(n, p);
+      else if (graph.selected) showGraphTooltip(graph.selected, { x: graph.selected.x, y: graph.selected.y });
       else hideGraphTooltip();
       drawGraph();
     } else if (n) {
@@ -1141,18 +1238,26 @@ function bindGraphEvents() {
     }
     canvas.style.cursor = n ? "pointer" : "default";
   });
-  const endDrag = () => {
-    if (graph.drag) {
+  const endDrag = (select) => {
+    const n = graph.drag;
+    if (n && select && !graph.dragMoved) {
+      graph.selected = n;
+      graph.hover = n;
+      showGraphTooltip(n, { x: n.x, y: n.y });
+    }
+    if (n) {
       graph.drag = null;
+      drawGraph();
       startGraphLoop();
     }
   };
-  canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("pointerup", () => endDrag(true));
+  canvas.addEventListener("pointercancel", () => endDrag(false));
   canvas.addEventListener("pointerleave", () => {
     if (!graph.drag) {
       graph.hover = null;
-      hideGraphTooltip();
+      if (graph.selected) showGraphTooltip(graph.selected, { x: graph.selected.x, y: graph.selected.y });
+      else hideGraphTooltip();
       drawGraph();
     }
   });
@@ -1314,12 +1419,24 @@ $("btn-memory-import").addEventListener("click", (e) => memoryOp("import_livingm
 $("btn-memory-reflect").addEventListener("click", (e) => memoryOp("reflect_now", {}, e.target));
 $("btn-memory-reembed").addEventListener("click", (e) => memoryOp("reembed", {}, e.target));
 $("btn-memory-test").addEventListener("click", testMemoryRecall);
+$("memory-test-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); testMemoryRecall(); }
+});
 $("btn-memory-search").addEventListener("click", () => queryMemories(true));
+$("memory-search").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); queryMemories(true); }
+});
 $("memory-filter-scope").addEventListener("change", () => queryMemories(true));
 $("btn-memory-prev").addEventListener("click", () => { memoryOffset = Math.max(0, memoryOffset - MEM_PAGE_LIMIT); queryMemories(false); });
 $("btn-memory-next").addEventListener("click", () => { memoryOffset += MEM_PAGE_LIMIT; queryMemories(false); });
 $("btn-memory-add").addEventListener("click", addMemory);
 $("btn-graph-reload").addEventListener("click", loadMemoryGraph);
+$("graph-scope-filter").addEventListener("change", (e) => {
+  graph.scope = e.target.value;
+  hideGraphTooltip();
+  $("graph-hint").classList.add("hidden");
+  if (graph.raw) initGraph(graph.raw);
+});
 $("tts-model").addEventListener("change", () => {
   // 切换模型时说话人/风格跟随新模型，默认值用其第一个
   const m = (modelsInfo || {})[$("tts-model").value];
@@ -1353,8 +1470,9 @@ window.addEventListener("resize", () => {
   if (wavePeaks && testAudio.duration) drawWave(testAudio.currentTime / testAudio.duration);
   else if (wavePeaks) drawWave(0);
   if (graph.loaded && !$("panel-memory").classList.contains("hidden")) {
+    updateGraphTargets();
     drawGraph();
-    startGraphLoop(); // 尺寸变化后唤醒几帧让边界约束生效
+    startGraphLoop();
   }
 });
 

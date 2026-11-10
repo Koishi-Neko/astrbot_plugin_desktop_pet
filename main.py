@@ -36,7 +36,7 @@ import re
 import sqlite3
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
@@ -2081,7 +2081,7 @@ class DesktopPetBridge(Star):
                 return {"has_data": False}
 
             rows = cur.execute("SELECT * FROM provider_stats").fetchall()
-            today = datetime.now().date()
+            today = datetime.now().astimezone().date()
 
             stats = {
                 "all_time": {"input": 0, "cached": 0, "output": 0, "ttft_sum": 0.0, "ttft_count": 0},
@@ -2102,8 +2102,10 @@ class DesktopPetBridge(Star):
                                 except ValueError:
                                     dt = datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
                             else:
-                                dt = datetime.fromtimestamp(float(ts))
-                            if dt.date() == today:
+                                dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            if dt.astimezone().date() == today:
                                 is_today = True
                         except Exception:
                             pass
@@ -2125,7 +2127,7 @@ class DesktopPetBridge(Star):
                 try: ttft = float(ttft) if ttft is not None else 0.0
                 except Exception: ttft = 0.0
 
-                stats["all_time"]["input"] += input_other
+                stats["all_time"]["input"] += input_other + cached
                 stats["all_time"]["cached"] += cached
                 stats["all_time"]["output"] += output
                 if ttft > 0:
@@ -2133,7 +2135,7 @@ class DesktopPetBridge(Star):
                     stats["all_time"]["ttft_count"] += 1
 
                 if is_today:
-                    stats["today"]["input"] += input_other
+                    stats["today"]["input"] += input_other + cached
                     stats["today"]["cached"] += cached
                     stats["today"]["output"] += output
                     if ttft > 0:

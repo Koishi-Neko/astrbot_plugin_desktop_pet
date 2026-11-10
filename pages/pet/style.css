@@ -328,10 +328,20 @@ audio { width: 100%; margin-top: 8px; }
 
 /* ---------- 记忆图谱 ---------- */
 
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.graph-toolbar select { min-width: 110px; }
+#graph-stats { margin-left: auto; }
 .graph-wrap { position: relative; }
 #memory-graph {
   width: 100%;
-  height: 320px;
+  height: 420px;
   display: block;
   background: var(--bg);
   border: 1px solid var(--border);

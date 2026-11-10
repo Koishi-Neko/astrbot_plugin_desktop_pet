@@ -151,7 +151,7 @@ def test_strip_think_parts_mixed():
 
 import sqlite3
 from unittest.mock import patch, MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 
 def test_get_provider_stats_no_file(tmp_path):
     bridge = DesktopPetBridge(MagicMock())
@@ -203,8 +203,8 @@ def test_get_provider_stats_normal(tmp_path):
             end_time REAL
         )
     """)
-    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-    cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_input_cached, token_output, time_to_first_token) VALUES (?, 10, 5, 20, 1.5)", (today_str,))
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+    cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_input_cached, token_output, time_to_first_token) VALUES (?, 10, 20, 20, 1.5)", (today_str,))
     cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_input_cached, token_output, time_to_first_token) VALUES (?, 30, 0, 40, 2.5)", ("2000-01-01 12:00:00.000000",))
     con.commit()
     con.close()
@@ -219,13 +219,13 @@ def test_get_provider_stats_normal(tmp_path):
         assert res["has_data"] is True
         stats = res["stats"]
 
-        assert stats["all_time"]["input"] == 40
-        assert stats["all_time"]["cached"] == 5
+        assert stats["all_time"]["input"] == 60
+        assert stats["all_time"]["cached"] == 20
         assert stats["all_time"]["output"] == 60
         assert stats["all_time"]["ttft_avg"] == 2.0
 
-        assert stats["today"]["input"] == 10
-        assert stats["today"]["cached"] == 5
+        assert stats["today"]["input"] == 30
+        assert stats["today"]["cached"] == 20
         assert stats["today"]["output"] == 20
         assert stats["today"]["ttft_avg"] == 1.5
 
@@ -243,7 +243,7 @@ def test_get_provider_stats_missing_optional_column(tmp_path):
             token_output INTEGER
         )
     """)
-    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
     cur.execute("INSERT INTO provider_stats (created_at, token_input_other, token_output) VALUES (?, 10, 20)", (today_str,))
     con.commit()
     con.close()

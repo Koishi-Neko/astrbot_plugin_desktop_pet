@@ -180,7 +180,7 @@
             </label>
             <label class="row">
               <span class="label">群聊前文条数</span>
-              <input type="text" id="memory-group-context-count" spellcheck="false" title="触发时把该群最近 N 条消息作为前文一起落库，0=关闭" />
+              <input type="number" id="memory-group-context-count" min="0" max="100" step="1" title="触发时把该群最近 N 条消息作为前文一起落库，0=关闭" />
             </label>
             <label class="row checkbox-row">
               <input type="checkbox" id="memory-scope-pet-independent" />
@@ -206,20 +206,20 @@
             </label>
             <label class="row">
               <span class="label">批量条数</span>
-              <input type="text" id="memory-reflect-batch" spellcheck="false" title="每个范围攒满 N 条消息触发一次反思" />
+              <input type="number" id="memory-reflect-batch" min="1" max="1000" step="1" title="每个范围攒满 N 条消息触发一次反思" />
               <span class="hint">每范围攒满 N 条消息触发一次反思</span>
             </label>
             <label class="row">
               <span class="label">召回条数 top_k</span>
-              <input type="text" id="memory-recall-topk" spellcheck="false" />
+              <input type="number" id="memory-recall-topk" min="1" max="50" step="1" />
             </label>
             <label class="row">
               <span class="label">召回最低相似度</span>
-              <input type="text" id="memory-recall-minscore" spellcheck="false" />
+              <input type="number" id="memory-recall-minscore" min="0" max="1" step="0.05" />
             </label>
             <label class="row">
               <span class="label">注入长度预算(字)</span>
-              <input type="text" id="memory-recall-maxchars" spellcheck="false" />
+              <input type="number" id="memory-recall-maxchars" min="100" max="10000" step="50" />
             </label>
             <div class="row buttons">
               <button id="btn-save-memory" class="btn primary">保存配置</button>
@@ -235,16 +235,26 @@
 
           <section class="card">
             <h3 class="card-title">记忆图谱 <button id="btn-graph-reload" class="btn small">重新加载</button></h3>
+            <div class="graph-toolbar">
+              <label for="graph-scope-filter">显示范围</label>
+              <select id="graph-scope-filter">
+                <option value="all" selected>全部</option>
+                <option value="pet">桌宠</option>
+                <option value="private">私聊</option>
+                <option value="group">群聊</option>
+              </select>
+              <span id="graph-stats" class="msg"></span>
+            </div>
             <div id="graph-hint" class="warn hidden"></div>
             <div class="graph-wrap">
-              <canvas id="memory-graph"></canvas>
+              <canvas id="memory-graph" role="img" aria-label="按范围分区的记忆关系图"></canvas>
               <div id="graph-tooltip" class="hidden"></div>
             </div>
             <div class="graph-legend">
               <span><i class="dot" style="background: var(--graph-pet)"></i>桌宠</span>
               <span><i class="dot" style="background: var(--graph-private)"></i>私聊</span>
               <span><i class="dot" style="background: var(--graph-group)"></i>群聊</span>
-              <span class="msg">节点大小随重要度（1–5）递增，可拖拽调整位置，悬停查看内容</span>
+              <span class="msg">按范围分区；悬停查看关联，点击固定详情，拖拽调整位置</span>
             </div>
           </section>
 
