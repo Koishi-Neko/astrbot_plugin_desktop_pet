@@ -47,6 +47,7 @@ from astrbot.api.message_components import Plain, Record
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, request
+from astrbot.core.message.message_event_result import MessageChain
 from starlette.responses import JSONResponse
 
 try:  # AstrBot 以包方式加载插件；pytest 平面布局回退为同级导入
@@ -115,13 +116,15 @@ EMOTION_INSTRUCTION_TTS = (
 JP_DUB_INSTRUCTION = (
     "\n\n【输出格式要求·必须严格遵守】每次回复必须同时包含两部分，缺一不可："
     "①中文正文：你的回复内容；"
-    "②日语配音稿：以「【JP】」开头，紧接与中文正文意思对应的日语，必须是纯日语口语短句，"
+    "②日语配音稿：以「【JP】」开头，是把中文正文要点压缩后的日语口语，"
+    "不是逐字翻译——中文正文较长时只译核心意思，限 2~3 句（总长 100 字以内），"
     "用于语音合成朗读，不含中文、不含任何方括号标记。"
     "完整格式示例：「早上好呀！【JP】おはよう！」"
     "禁止省略【JP】部分。除【JP】外不要输出任何其他方括号标记。"
 )
 
 _JP_TAG = re.compile(r"\s*【\s*JP\s*】\s*", re.IGNORECASE)
+_JP_SENT_END = re.compile(r"(?<=[。！？!?])")
 _IDENT_REMINDER = re.compile(r"User ID: [^\n,]*, Nickname: [^\n]*")
 
 TTS_CONFIG_KEYS = (
@@ -932,7 +935,7 @@ class DesktopPetBridge(Star):
             # 长人格 prompt 会稀释 system 侧格式要求，在用户消息末尾再提醒一次
             req.prompt = (req.prompt or "") + (
                 "\n（格式提醒：本次回复必须包含中文正文和【JP】日语配音稿两部分，"
-                "【JP】为纯日语，缺一不可。）"
+                "【JP】为纯日语、限两三句简短口语，缺一不可。）"
             )
             logger.info(f"[desktop_pet] qq jp dub injected: {event.unified_msg_origin}")
 
@@ -952,6 +955,7 @@ class DesktopPetBridge(Star):
             if isinstance(comp, Plain) and _JP_TAG.search(comp.text or ""):
                 changed = True
                 zh, jp = self._split_jp(comp.text)
+                jp = self._cap_jp_text(jp)
                 if not jp:
                     new_chain.append(comp)
                     continue
@@ -975,6 +979,37 @@ class DesktopPetBridge(Star):
             new_chain.append(comp)
         if changed:
             result.chain = new_chain
+            # 折叠规避：中文正文超过平台折叠阈值（forward_threshold）时，整条链
+            # 会被 AstrBot 包进合并转发 Node，QQ 折叠气泡里文字看不到、语音也
+            # 无法播放。此时把 Record 拆出来单独发一条，文字链单独折叠。
+            try:
+                cfg = self.context.get_config(event.unified_msg_origin)
+                threshold = int(
+                    (cfg.get("platform_settings", {}) or {}).get(
+                        "forward_threshold", 300
+                    )
+                )
+            except Exception:
+                threshold = 300
+            text_len = sum(
+                len(c.text) for c in new_chain if isinstance(c, Plain) and c.text
+            )
+            records = [c for c in new_chain if isinstance(c, Record)]
+            if records and text_len > threshold:
+                try:
+                    await self.context.send_message(
+                        event.unified_msg_origin, MessageChain(chain=records)
+                    )
+                    result.chain = [
+                        c for c in new_chain if not isinstance(c, Record)
+                    ]
+                    logger.info(
+                        f"[desktop_pet] 正文 {text_len} 字超折叠阈值 {threshold}，"
+                        "语音已单独发送"
+                    )
+                except Exception as e:
+                    # 单独发送失败则保留原链，宁可折叠也不丢语音
+                    logger.warning(f"[desktop_pet] 语音单独发送失败: {e}")
 
     # ---------- 内置长期记忆（向量召回 + LLM 反思，独立于 LivingMemory） ----------
 
@@ -2202,6 +2237,27 @@ class DesktopPetBridge(Star):
         if len(parts) == 2:
             return parts[0].strip(), parts[1].strip()
         return body.strip(), ""
+
+    @staticmethod
+    def _cap_jp_text(text: str, max_sentences: int = 3, max_chars: int = 150) -> str:
+        """配音稿缩句兜底：最多 max_sentences 句且总长不超 max_chars，在句边界截断；
+        首句即超限则硬截 max_chars。防止长配音稿触发 sbv2 422 / 合成过慢。"""
+        text = (text or "").strip()
+        if not text:
+            return text
+        sents = [s for s in _JP_SENT_END.split(text) if s.strip()]
+        if not sents:
+            return text[:max_chars]
+        kept, total = [], 0
+        for s in sents[:max_sentences]:
+            if total + len(s) > max_chars:
+                break
+            kept.append(s)
+            total += len(s)
+        out = "".join(kept).strip()
+        if not out:
+            out = sents[0][:max_chars]
+        return out
 
     async def _synthesize(self, jp_text: str, overrides: dict | None = None) -> str | None:
         """调用 Style-Bert-VITS2 合成一句日语，返回 base64 编码的 wav；失败返回 None。

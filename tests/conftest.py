@@ -10,6 +10,10 @@ def pytest_configure():
     sys.modules['astrbot.api.provider'] = astrbot_mock.api.provider
     sys.modules['astrbot.api.star'] = astrbot_mock.api.star
     sys.modules['astrbot.api.web'] = astrbot_mock.api.web
+    sys.modules['astrbot.core'] = astrbot_mock.core
+    sys.modules['astrbot.core.message'] = astrbot_mock.core.message
+    sys.modules['astrbot.core.message.message_event_result'] = astrbot_mock.core.message.message_event_result
+    sys.modules['astrbot.core.message.message_event_result'].MessageChain = MagicMock()
 
     # We also need to define Star for DesktopPetBridge to inherit from
     class MockStar:
